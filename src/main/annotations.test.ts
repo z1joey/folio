@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   annotationFilePathFor,
+  annotationIdAtRange,
   byteOffsetAt,
   emptyAnnotationList,
   excerpt,
@@ -9,6 +10,7 @@ import {
   locateValue,
   newAnnotation,
   parseAnnotationList,
+  parseAnnotationRequest,
   queueSidecarWrite,
   readAnnotationList,
   withAnnotation,
@@ -257,5 +259,112 @@ describe('sidecar write queue', () => {
     await expect(queueSidecarWrite('sidecar', async () => { throw new Error('disk full') })).rejects.toThrow('disk full')
     await expect(queueSidecarWrite('sidecar', async () => 'recovered')).resolves.toBe('recovered')
     await expect(queueSidecarWrite('other', async () => 'unaffected')).resolves.toBe('unaffected')
+  })
+})
+
+describe('range annotations', () => {
+  const ranged = (id: string, start: number, end: number): Annotation => ({
+    id,
+    itemIndex: 0,
+    path: ['en'],
+    line: null,
+    byteOffset: null,
+    snippet: null,
+    message: '',
+    createdAt: '2026-11-09T10:00:00.000Z',
+    range: { start, end }
+  })
+  const whole: Annotation = {
+    id: 'w-1',
+    itemIndex: 0,
+    path: ['en'],
+    line: null,
+    byteOffset: null,
+    snippet: null,
+    message: 'flagged',
+    createdAt: '2026-11-09T10:00:00.000Z'
+  }
+
+  it('keeps non-overlapping ranges side by side on one value', () => {
+    const one = withAnnotation(emptyAnnotationList('logs.json'), ranged('r-1', 0, 5))
+    const two = withAnnotation(one, ranged('r-2', 8, 12))
+    expect(two.annotations.map((a) => a.id)).toEqual(['r-1', 'r-2'])
+  })
+
+  it('trims a partially overlapping range and drops a fully covered one', () => {
+    const one = withAnnotation(emptyAnnotationList('logs.json'), ranged('r-1', 2, 10))
+    // [4, 14) overlaps [2, 10): the old range trims to [2, 4).
+    const two = withAnnotation(one, ranged('r-2', 4, 14))
+    expect(two.annotations.find((a) => a.id === 'r-1')?.range).toEqual({ start: 2, end: 4 })
+    expect(two.annotations).toHaveLength(2)
+    // [0, 6) fully covers the remainder [2, 4): it disappears.
+    const three = withAnnotation(two, ranged('r-3', 0, 6))
+    expect(three.annotations.find((a) => a.id === 'r-1')).toBeUndefined()
+    expect(three.annotations).toHaveLength(2)
+  })
+
+  it('splits a range whose middle gets annotated into two pieces', () => {
+    const one = withAnnotation(emptyAnnotationList('logs.json'), ranged('r-1', 0, 20))
+    const two = withAnnotation(one, ranged('r-2', 8, 12))
+    const kept = two.annotations.filter((a) => a.id === 'r-1').map((a) => a.range)
+    expect(kept).toEqual([{ start: 0, end: 8 }, { start: 12, end: 20 }])
+  })
+
+  it('a whole-value annotation replaces ranged ones at the same location', () => {
+    const one = withAnnotation(emptyAnnotationList('logs.json'), ranged('r-1', 0, 5))
+    const two = withAnnotation(one, whole)
+    expect(two.annotations).toHaveLength(1)
+    expect(two.annotations[0].id).toBe('w-1')
+    // …and re-adding a range afterwards coexists with the whole-value one.
+    const three = withAnnotation(two, ranged('r-2', 1, 3))
+    expect(three.annotations.map((a) => a.id)).toEqual(['w-1', 'r-2'])
+  })
+
+  it('leaves other locations untouched when trimming', () => {
+    const elsewhere: Annotation = { ...ranged('r-x', 0, 100), path: ['cn'] }
+    const one = withAnnotation(withAnnotation(emptyAnnotationList('logs.json'), elsewhere), ranged('r-1', 2, 10))
+    const two = withAnnotation(one, ranged('r-2', 4, 6))
+    expect(two.annotations.find((a) => a.id === 'r-x')?.range).toEqual({ start: 0, end: 100 })
+  })
+
+  it('finds exactly the annotation recorded at a range', () => {
+    const one = withAnnotation(emptyAnnotationList('logs.json'), ranged('r-1', 2, 10))
+    expect(annotationIdAtRange(one, 0, ['en'], { start: 2, end: 10 })).toBe('r-1')
+    expect(annotationIdAtRange(one, 0, ['en'], { start: 3, end: 10 })).toBeNull()
+    expect(annotationIdAtRange(one, 0, ['cn'], { start: 2, end: 10 })).toBeNull()
+    expect(annotationIdAtRange(one, 1, ['en'], { start: 2, end: 10 })).toBeNull()
+    // The legacy whole-value annotation answers only a null range.
+    const wholeList = withAnnotation(emptyAnnotationList('logs.json'), whole)
+    expect(annotationIdAtRange(wholeList, 0, ['en'], null)).toBe('w-1')
+    expect(annotationIdAtRange(wholeList, 0, ['en'], { start: 0, end: 3 })).toBeNull()
+  })
+
+  it('validates stored ranges and drops malformed ones', () => {
+    const good = JSON.stringify(withAnnotation(emptyAnnotationList('logs.json'), ranged('r-1', 2, 10)), null, 2)
+    expect(parseAnnotationList(good)?.annotations).toHaveLength(1)
+    for (const bad of [
+      { start: 10, end: 2 },
+      { start: -1, end: 5 },
+      { start: 1.5, end: 5 },
+      { start: 2, end: 2 }
+    ]) {
+      const text = JSON.stringify(
+        { version: 1, sourceFile: 'logs.json', createdAt: 'x', updatedAt: 'x', annotations: [{ ...ranged('r-1', 2, 10), range: bad }] }
+      )
+      expect(parseAnnotationList(text)?.annotations).toHaveLength(0)
+    }
+  })
+
+  it('parses request ranges, rejecting malformed ones', () => {
+    expect(parseAnnotationRequest({ fileIndex: 0, itemIndex: 1, path: ['en'], range: { start: 2, end: 10 } }))
+      .toEqual({ fileIndex: 0, itemIndex: 1, path: ['en'], range: { start: 2, end: 10 } })
+    expect(parseAnnotationRequest({ fileIndex: 0, itemIndex: 1, path: ['en'] }))
+      .toEqual({ fileIndex: 0, itemIndex: 1, path: ['en'], range: null })
+    expect(
+      parseAnnotationRequest({ fileIndex: 0, itemIndex: 1, path: ['en'], range: { start: 10, end: 2 } })
+    ).toBeNull()
+    expect(
+      parseAnnotationRequest({ fileIndex: 0, itemIndex: 1, path: ['en'], range: { start: 'a', end: 10 } })
+    ).toBeNull()
   })
 })

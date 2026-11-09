@@ -83,6 +83,12 @@ body {
   padding-left: 80px; /* room for the traffic lights */
 }
 
+/* Native macOS fullscreen hides the traffic lights: reclaim their space
+   so the header tools sit where the windowed layout's gap was. */
+.app.os-fullscreen .header {
+  padding-left: 16px;
+}
+
 .app-version {
   color: var(--muted);
   font-size: 12px;
@@ -486,6 +492,67 @@ kbd {
   user-select: none;
 }
 
+/* ── Recent folders on the initial page ─────────────────────────────── */
+
+.recents-label {
+  margin-top: 20px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--key);
+}
+
+.recent-folders {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: min(440px, 100%);
+}
+
+.recent-folder {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 1px;
+  width: 100%;
+  text-align: left;
+  font: inherit;
+  background: var(--panel);
+  border: 1px solid var(--hairline);
+  border-radius: 8px;
+  padding: 8px 12px;
+  cursor: pointer;
+}
+
+.recent-folder:hover {
+  border-color: var(--hairline-strong);
+}
+
+.recent-folder:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.recent-folder-name {
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--fg);
+}
+
+.recent-folder-path {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--faint);
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .error-title {
   font-size: 17px;
   font-weight: 600;
@@ -518,7 +585,7 @@ kbd {
     animation: none;
   }
 
-  .jv-summary::before {
+  .jv-summary::after {
     transition: none;
   }
 }
@@ -529,16 +596,17 @@ kbd {
 .jv-fields {
   display: flex;
   flex-direction: column;
-  gap: 18px;
+  gap: 10px;
 }
 
 .jv-field {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 2px;
 }
 
-/* The small caps label above its value. */
+/* The small caps label above its value. Keys are structure, not content:
+   they never join a selection. */
 .jv-key {
   font-size: 11px;
   font-weight: 600;
@@ -546,6 +614,7 @@ kbd {
   text-transform: uppercase;
   color: var(--key);
   overflow-wrap: anywhere;
+  user-select: none;
 }
 
 /* The value area anchors its annotate control at its top-right corner. */
@@ -585,34 +654,30 @@ kbd {
   border: 1px solid var(--hairline);
   border-radius: 8px;
   background: var(--panel);
-  padding: 16px 18px;
-  margin-top: 4px;
+  padding: 10px 12px;
+  margin-top: 2px;
 }
 
-/* A group inside a group drops the box and nearly all padding for a
-   color-coded left rule: the hue tracks the nesting level, so depth stays
-   readable once spacing can no longer afford to grow. */
+/* A group inside a group drops the border and sits on a faint tint that
+   drifts toward the page background with depth, so nesting stays readable
+   once spacing can no longer afford to grow. */
 .jv-group .jv-group {
   border: none;
-  border-left: 2px solid color-mix(in srgb, var(--accent) 55%, var(--hairline));
-  border-radius: 0;
-  background: none;
-  padding: 2px 0 2px 8px;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--bg) 55%, var(--panel));
+  padding: 6px 8px;
 }
 
 .jv-group .jv-group .jv-group {
-  border-left-color: color-mix(in srgb, var(--num) 55%, var(--hairline));
+  background: color-mix(in srgb, var(--bg) 80%, var(--panel));
 }
 
 .jv-group .jv-group .jv-group .jv-group {
-  border-left-color: color-mix(in srgb, var(--bool) 55%, var(--hairline));
+  background: var(--bg);
 }
 
-.jv-group .jv-group .jv-group .jv-group .jv-group {
-  border-left-color: color-mix(in srgb, var(--key) 55%, var(--hairline));
-}
-
-/* The fold header of a group: disclosure arrow plus a count summary. */
+/* The fold header of a group: a count summary, then the disclosure arrow
+   trailing it. */
 .jv-summary {
   display: inline-flex;
   align-items: center;
@@ -625,24 +690,25 @@ kbd {
   background: none;
   border: none;
   padding: 2px 4px;
-  margin: 0 0 8px -4px;
+  margin: 0 0 4px -4px;
   cursor: pointer;
   user-select: none;
 }
 
-.jv-summary::before {
+.jv-summary::after {
   content: '';
   width: 0;
   height: 0;
   border-left: 4px solid transparent;
   border-right: 4px solid transparent;
   border-top: 5px solid currentColor;
-  margin-right: 6px;
-  transform: rotate(90deg);
+  margin-left: 6px;
+  /* The triangle points down by construction; folded = turned to ▸. */
+  transform: rotate(-90deg);
   transition: transform 0.15s ease;
 }
 
-.jv-summary[aria-expanded='true']::before {
+.jv-summary[aria-expanded='true']::after {
   transform: rotate(0deg);
 }
 
@@ -655,29 +721,38 @@ kbd {
   outline-offset: 2px;
 }
 
-/* Arrays read as numbered lists. */
+/* Arrays read as numbered lists: the number sits on the same line as the
+   item's first line, so it aligns with a fold header's title instead of
+   floating above it. */
 .jv-list {
   list-style: none;
   counter-reset: jv-item;
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 6px;
 }
 
 .jv-list > li {
   position: relative;
-  padding-left: 18px;
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
 }
 
 .jv-list > li::before {
   counter-increment: jv-item;
   content: counter(jv-item) '.';
-  position: absolute;
-  left: 0;
-  top: 1px;
+  flex: none;
+  min-width: 20px;
+  text-align: right;
   font-family: var(--mono);
   font-size: 11px;
   color: var(--faint);
+}
+
+.jv-list > li > *:not(.annotate-control) {
+  flex: 1;
+  min-width: 0;
 }
 
 .jv-list > li > .jv-group {
@@ -688,6 +763,64 @@ kbd {
   color: var(--faint);
   font-style: italic;
   font-size: 13.5px;
+}
+
+/* ── Compact inline runs ────────────────────────────────────────────── */
+
+/* Leaf-shaped containers read as one flowing line instead of a panel:
+   array items become pills, scalar records become `key: value` pairs. */
+.jv-inline {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 10px;
+  line-height: 1.5;
+}
+
+/* A run nested in a pair sits tighter: its items belong to that pair. */
+.jv-pair .jv-inline {
+  gap: 0 6px;
+}
+
+/* A pair whose value is itself a container keeps its natural one-line
+   width: the run wraps between pairs, never inside them — an internally
+   wrapped pill doubles its height and reads as a blank band above the
+   next row. In a very narrow column the pair caps at the line and its
+   contents wrap as the fallback. Long scalar values still wrap normally. */
+.jv-pair:has(> .jv-inline) {
+  flex-shrink: 0;
+  max-width: 100%;
+}
+
+.jv-pair > .jv-inline {
+  min-width: 0;
+}
+
+.jv-pill {
+  position: relative;
+  display: inline-flex;
+  align-items: baseline;
+  background: color-mix(in srgb, var(--hairline) 40%, transparent);
+  border-radius: 5px;
+  padding: 0 6px;
+}
+
+.jv-pair {
+  position: relative;
+  display: inline-flex;
+  align-items: baseline;
+  gap: 5px;
+}
+
+.jv-pair-key {
+  font-size: 12.5px;
+  color: var(--key);
+  overflow-wrap: break-word;
+  user-select: none;
+}
+
+.jv-pair-sep {
+  color: var(--faint);
 }
 
 .jv-more {
@@ -717,6 +850,16 @@ kbd {
   border-radius: 6px;
 }
 
+/* A precise selection inside a value's text: the mark hugs the words it
+   covers, no box around the whole entry. */
+.jv-mark {
+  background: var(--highlight);
+  box-shadow: 0 0 0 1px var(--highlight-edge);
+  border-radius: 3px;
+  padding: 0 1px;
+  color: inherit;
+}
+
 .jv-field.jv-annotated {
   padding: 2px 8px;
   margin: -2px -8px;
@@ -727,57 +870,60 @@ kbd {
   padding-right: 8px;
 }
 
-/* The per-entry control: invisible until the pointer is on the entry's
-   value; annotated entries keep their ✕ always available. */
-.annotate-control {
-  flex: none;
-  font: inherit;
-  font-size: 11px;
-  line-height: 1.4;
-  color: var(--muted);
+/* Annotated pills and pairs wear the same highlighter; the pair's padding
+   keeps the ring off the glyphs. */
+.jv-pill.jv-annotated,
+.jv-pair.jv-annotated {
+  background: var(--highlight);
+  box-shadow: 0 0 0 1px var(--highlight-edge);
+}
+
+.jv-pair.jv-annotated {
+  padding: 1px 4px;
+  margin: -1px -4px;
+}
+
+/* ── Selection context menu ─────────────────────────────────────────── */
+
+/* Right-clicking a selection (or an annotated span) offers copy plus
+   annotate/remove; the panel follows the pointer and closes on click,
+   Escape or scroll. Every annotation lives and dies through this menu —
+   there are no annotate buttons on the page. */
+
+/* Right-clicking a selection inside a value offers copy and annotate;
+   the panel follows the pointer and closes on click, Escape or scroll. */
+.jv-menu {
+  position: fixed;
+  z-index: 100;
+  min-width: 160px;
+  padding: 4px;
   background: var(--panel);
   border: 1px solid var(--hairline-strong);
-  border-radius: 5px;
-  padding: 1px 7px;
-  cursor: pointer;
-  opacity: 0;
-  transition: opacity 0.12s ease;
+  border-radius: 9px;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.18);
 }
 
-.jv-list > li > .annotate-control,
-.jv-value > .annotate-control {
-  position: absolute;
-  right: 8px;
-  top: 0;
-}
-
-.jv-value > .annotate-control {
-  right: 0;
-}
-
-/* The control shows only while the pointer is on the innermost hovered
-   entry's value: `:hover` also matches every enclosing entry, so the
-   `:has` guard keeps an outer entry's button hidden whenever a nested
-   entry is the one being pointed at. Keys never reveal a control. */
-.jv-value:hover:not(:has(.jv-field:hover, .jv-list > li:hover)) > .annotate-control,
-.jv-list > li:hover:not(:has(.jv-field:hover, .jv-list > li:hover)) > .annotate-control,
-.annotate-control:focus-visible,
-.annotate-control.remove {
-  opacity: 1;
-}
-
-.annotate-control:hover {
+.jv-menu-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  font: inherit;
+  font-size: 13px;
   color: var(--fg);
-  border-color: var(--faint);
+  background: none;
+  border: none;
+  border-radius: 6px;
+  padding: 6px 10px;
+  cursor: pointer;
 }
 
-.annotate-control.remove {
-  color: var(--danger);
+.jv-menu-item:hover {
+  background: var(--bg);
 }
 
-.annotate-control:focus-visible {
+.jv-menu-item:focus-visible {
   outline: 2px solid var(--accent);
-  outline-offset: 1px;
+  outline-offset: -2px;
 }
 
 /* An annotated error message keeps the same highlighter treatment. */

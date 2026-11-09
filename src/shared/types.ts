@@ -55,6 +55,13 @@ export type SearchResponse =
   | { status: 'error'; message: string }
 
 /**
+ * A half-open character span `[start, end)` inside one value's rendered
+ * text, for annotations that mark exactly the selected words rather than
+ * the whole value.
+ */
+export type AnnotationRange = { start: number; end: number }
+
+/**
  * One flagged location in a JSON file: an error the reader wants to record,
  * or any value worth marking while reading. Annotations live in a sidecar
  * file, one per source file (see `AnnotationList`).
@@ -83,6 +90,11 @@ export type Annotation = {
   message: string
   /** ISO timestamp of the moment the annotation was created. */
   createdAt: string
+  /**
+   * The exact selected span inside the value's text. Absent for legacy
+   * and error annotations, which mark the whole value.
+   */
+  range?: AnnotationRange
 }
 
 /** The sidecar document stored next to a source file as `<name>.annotations.json`. */
@@ -105,12 +117,16 @@ export type AddAnnotationRequest = {
   path: JsonPath | null
   /** The error message to record; when empty, the value's excerpt is used. */
   message: string
+  /** The selected span to mark; absent marks the whole value. */
+  range?: AnnotationRange
 }
 
 export type RemoveAnnotationRequest = {
   fileIndex: number | null
   itemIndex: number | null
   path: JsonPath | null
+  /** The exact span to remove; absent removes the whole-value annotation. */
+  range?: AnnotationRange | null
 }
 
 export type AnnotationsResponse =
@@ -127,9 +143,26 @@ export type AnnotationsResponse =
     }
   | { status: 'error'; message: string }
 
+/**
+ * One folder on the initial page's recent list, most recent first. Kept
+ * in userData so the list survives restarts.
+ */
+export type RecentFolder = {
+  /** Absolute folder path — also the identity used to reopen it. */
+  path: string
+  /** Display name (the folder's basename). */
+  name: string
+  /** ISO timestamp of the last open. */
+  lastOpenedAt: string
+}
+
 export interface JsonReaderApi {
   /** Shows the open-folder dialog and loads the folder's JSON files. */
   openFolder: () => Promise<OpenResponse>
+  /** The folders most recently opened successfully, most recent first. */
+  getRecentFolders: () => Promise<RecentFolder[]>
+  /** Reopens a folder by absolute path; a vanished folder errors and drops off the recents. */
+  openRecentFolder: (path: string) => Promise<OpenResponse>
   /** Loads the file at `index` of the folder opened most recently. */
   openFile: (index: number) => Promise<OpenFileResponse>
   /** Parses one top-level element of an array-root file on demand. */
@@ -148,6 +181,8 @@ export interface JsonReaderApi {
   removeAnnotation: (request: RemoveAnnotationRequest) => Promise<AnnotationsResponse>
   /** Fired when the user opens a folder via the menu (Cmd/Ctrl+O). */
   onOpenFolderRequested: (callback: () => void) => () => void
+  /** Fired when the window enters or leaves native (system) fullscreen. */
+  onFullscreenChanged: (callback: (isFullscreen: boolean) => void) => () => void
   /** The app version declared in package.json (e.g. "0.1.0"). */
   getVersion: () => Promise<string>
 }
