@@ -12,7 +12,7 @@ dumps, logs, datasets — are shown one item at a time with keyboard paging, so
 even multi-gigabyte files open instantly. Every other JSON value is rendered
 as a structured, human-readable document.
 
-![JSON Reader with a folder of dictionary files open: the header carries icon tools for collapsing the sidebar and fullscreen reading, the sidebar lists the folder's JSON files, a nested entry is rendered with foldable groups, and the pager shows item 1 of 4,879](assets/screenshot.png)
+![JSON Reader with a folder of dictionary files open: the header carries icon tools for the sidebar, a global expand/collapse toggle, and fullscreen reading; the sidebar lists the folder's JSON files; a word entry renders as a readable outline — tags as pills, an annotated span highlighted inside a sentence — and the pager shows item 1 of 1](assets/screenshot.png)
 
 ## Highlights
 
@@ -28,22 +28,33 @@ as a structured, human-readable document.
   value prefixes, then any occurrence. Results show the file, the enclosing
   field, a highlighted snippet, and the item number; picking a result opens
   that file and jumps to that item.
-- **Annotations for errors worth keeping.** While reading, hover any value
-  and press *Annotate* — or use *Annotate Error* on an item or file that
-  fails to load — and the location is recorded in a sidecar
-  `<file>.annotations.json` next to the source: the array item, the JSON
-  path, the line, the byte offset, and a raw excerpt of the value. Each
-  source file gets its own sidecar, which is listed right after its source
-  file once it exists, annotated spots stay highlighted in the reader, and
-  pressing the control again removes the annotation.
+- **Annotations, precise as a selection.** Select any text inside a value,
+  right-click, and the menu offers *Copy* and *Annotate*: the exact span is
+  recorded in a sidecar `<file>.annotations.json` next to the source — the
+  array item, the JSON path, the character range, the line, the byte offset,
+  and a raw excerpt of the value. One value can carry several
+  non-overlapping marks (an overlapping selection trims the old spans), the
+  marked words stay highlighted in the reader, and selecting the same span
+  again — or just right-clicking inside it — offers *Remove annotation*.
+  *Annotate Error* still flags a whole item or file that fails to load.
+
+  ![Right-clicking an annotated word opens the menu with Copy and Remove annotation; the word carries a highlighter mark inside its sentence](assets/annotations.png)
+- **Recent folders.** The initial page lists the three most recently opened
+  folders; clicking one reopens it directly, and entries whose folder has
+  disappeared drop off the list on their own.
+
+  ![The initial page with an Open Folder button and three recent folders listed beneath it](assets/recents.png)
 - **Fullscreen reading.** The header's expand icon fills the screen with the
   document alone — no sidebar, no header, no pager. The keyboard keeps
   working: `←/→` page items, `↑/↓` scrolls, `Esc` returns.
-- **A reader, not an editor.** Objects read as label/value entries, arrays as
-  numbered lists, and nested groups fold behind a count summary — unusually
-  large groups start collapsed so an item opens as a readable overview
-  instead of a wall. Very long strings are truncated with a *Show all*
-  button.
+- **A reader, not an editor.** Leaf-shaped containers — arrays of scalars,
+  records of scalars, machine-nested grouping — collapse into a single
+  flowing line of pills and `key: value` pairs; structured records read as
+  dictionary cards, nested groups sit on quiet tinted panels, and every
+  child group starts folded behind a count summary so an item opens as a
+  readable outline instead of a wall. A header toggle expands or collapses
+  all sections at once, and very long strings are truncated with a
+  *Show all* button.
 - **Keyboard-first.** Page through items, jump to an item by number, scroll
   the document, and search without leaving the keyboard; files are picked in
   the sidebar or through search.
@@ -103,15 +114,17 @@ npm run typecheck
   individually on demand. Opening a huge file never parses it all, and moving
   between items never re-reads the file.
 - **Preload** (`src/preload`) — exposes the renderer-facing calls
-  (`openFolder`, `openFile`, `getItem`, `search`, `onOpenFolderRequested`)
-  over `contextBridge`, with `contextIsolation: true`, `nodeIntegration:
+  (`openFolder`, `openFile`, `getItem`, `search`, annotations, recent
+  folders, `onOpenFolderRequested`, `onFullscreenChanged`) over
+  `contextBridge`, with `contextIsolation: true`, `nodeIntegration:
   false`, and `sandbox: true`.
 - **Renderer** (`src/renderer`) — React app; renders the current value only,
   along with the reading chrome: the collapsible sidebar, search, the pager,
-  and fullscreen reading mode. Search is folder-aware: results can come from
-  any JSON file in the opened folder, and selecting a result jumps to that
-  file. Annotations are stored by the main process in sidecar files; the
-  renderer only decides where the reader clicked.
+  the selection context menu, and fullscreen reading mode. Search is
+  folder-aware: results can come from any JSON file in the opened folder,
+  and selecting a result jumps to that file. Annotations are stored by the
+  main process in sidecar files; the renderer only decides what the reader
+  selected — the exact value path and character span.
 - **Shared** (`src/shared`) — IPC response shapes used by both sides.
 
 ### CI and releases

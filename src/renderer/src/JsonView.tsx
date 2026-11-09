@@ -171,27 +171,37 @@ function ValueMenu({
 function selectionRangeInElement(el: Element, domRange: Range): AnnotationRange | null {
   const children = Array.from(el.childNodes)
   const childTexts = children.map((c) => c.textContent ?? '')
+  const textLength = (node: Node): number => node.textContent?.length ?? 0
+  // An element container reports its offset as a child index; translate it
+  // into the text length of the children it points past.
+  const textBefore = (parent: Node, childIndex: number): number =>
+    Array.from(parent.childNodes)
+      .slice(0, childIndex)
+      .reduce((acc, child) => acc + textLength(child), 0)
   const resolve = (node: Node, offset: number): number | null => {
     if (node === el) return textOffsetBefore(childTexts, offset, 0)
     const index = children.findIndex((c) => c === node || c.contains(node))
     if (index === -1) return null
-    let within = offset
     const top = children[index]
-    if (node !== top) {
+    let within: number
+    if (node === top) {
+      within = textBefore(top, offset)
+    } else {
       let inner = 0
       let done = false
       const walk = (parent: Node): void => {
         for (const child of Array.from(parent.childNodes)) {
           if (done) return
           if (child === node) {
-            within = inner + offset
+            within = inner + (node.nodeType === Node.ELEMENT_NODE ? textBefore(node, offset) : offset)
             done = true
             return
           }
-          inner += child.textContent?.length ?? 0
+          inner += textLength(child)
           walk(child)
         }
       }
+      within = 0
       walk(top)
       if (!done) return null
     }
