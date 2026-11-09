@@ -2,7 +2,7 @@ import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 import { JsonView } from './JsonView'
-import { pathKey } from '../../shared/annotationPath'
+import type { Annotation } from '../../shared/types'
 import type { AnnotationView } from './JsonView'
 
 const SAMPLE = {
@@ -110,8 +110,16 @@ describe('JsonView shape-adaptive rendering', () => {
     // metadata/forms/pronunciation must not grow fold headers: each key is
     // followed by an inline run, not a group.
     for (const key of ['metadata', 'pronunciation', 'forms']) {
-      expect(markup).toMatch(new RegExp(`jv-key">${key}</div><div class="jv-value"><span class="jv-inline"`))
+      expect(markup).toMatch(new RegExp(`jv-key">${key}</div><div class="jv-value"[^>]*><span class="jv-inline"`))
     }
+  })
+
+  it('tags values with their path for the context menu, keys never', () => {
+    const markup = render(SAMPLE)
+    expect(markup).toContain('data-json-path="[')
+    // Field keys and pair keys carry no path attribute.
+    expect(markup).not.toMatch(/jv-key"[^>]*data-json-path/)
+    expect(markup).not.toMatch(/jv-pair-key"[^>]*data-json-path/)
   })
 
   it('compacts the machine-shaped highlight nesting into pills', () => {
@@ -152,12 +160,50 @@ describe('JsonView shape-adaptive rendering', () => {
     expect(markup).not.toContain('>partOfSpeech<')
   })
 
-  it('highlights an annotated pill through the unchanged path keys', () => {
+  it('highlights a whole-value annotation through the unchanged path keys', () => {
     const annotation: AnnotationView = {
-      annotatedKeys: new Set([pathKey(['tags', 0])]),
+      annotations: [{ ...baseAnnotation('tags-pill'), path: ['tags', 0] }],
       onToggle: () => {}
     }
     const markup = render(SAMPLE, annotation)
-    expect(markup).toMatch(/jv-pill jv-annotated"[^]*?jv-string">gk</)
+    // Exactly one annotated pill — the gk one — with no annotation buttons
+    // anywhere: removal lives in the selection context menu.
+    expect(markup.match(/jv-pill jv-annotated/g)?.length).toBe(1)
+    expect(markup).not.toContain('annotate-control')
+  })
+
+  it('marks exactly the annotated span inside a string value', () => {
+    const annotation: AnnotationView = {
+      annotations: [{ ...baseAnnotation('sense-en'), path: ['msg'], range: { start: 6, end: 11 } }],
+      onToggle: () => {}
+    }
+    const markup = render({ msg: 'hello brave world' }, annotation)
+    expect(markup).toMatch(/<mark class="jv-mark">brave<\/mark>/)
+    // The ✕ belongs to whole-value annotations only; ranges remove via menu.
+    expect(markup).not.toContain('annotate-control')
+  })
+
+  it('clips string ranges to the truncated text of long values', () => {
+    const long = 'x'.repeat(6000)
+    const annotation: AnnotationView = {
+      annotations: [{ ...baseAnnotation('long'), path: ['log'], range: { start: 5990, end: 6000 } }],
+      onToggle: () => {}
+    }
+    const markup = render({ log: long }, annotation)
+    // The range sits past the truncation point, so nothing is marked yet.
+    expect(markup).not.toContain('jv-mark')
   })
 })
+
+function baseAnnotation(id: string): Annotation {
+  return {
+    id,
+    itemIndex: null,
+    path: null,
+    line: null,
+    byteOffset: null,
+    snippet: null,
+    message: '',
+    createdAt: '2026-11-09T10:00:00.000Z'
+  }
+}

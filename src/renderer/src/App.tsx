@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import type { Annotation, JsonPath, RootInfo, SearchHit } from '../../shared/types'
+import type { Annotation, AnnotationRange, JsonPath, OpenResponse, RecentFolder, RootInfo, SearchHit } from '../../shared/types'
 import { jsonReader } from './ipc'
-import { annotatedKeys, decideAnnotationToggle, isAnnotated } from './annotations'
+import { annotationsForItem, decideAnnotationToggle, decideRangeToggle, isAnnotated } from './annotations'
 import type { AnnotationView } from './JsonView'
 import FilePanel from './FilePanel'
 import ItemPosition from './ItemPosition'
@@ -72,6 +72,10 @@ export default function App(): React.ReactElement {
   // Fullscreen reading: the window goes fullscreen and every piece of chrome
   // is removed — the document alone remains, driven by the keyboard.
   const [zen, setZen] = useState(false)
+  // Native (system) fullscreen hides the traffic lights, so the header can
+  // reclaim the space they reserve in the windowed layout.
+  const [osFullscreen, setOsFullscreen] = useState(false)
+  useEffect(() => jsonReader.onFullscreenChanged(setOsFullscreen), [])
   const [version, setVersion] = useState('')
   useEffect(() => {
     void jsonReader.getVersion().then(setVersion)
@@ -110,6 +114,17 @@ export default function App(): React.ReactElement {
     const result = await jsonReader.getAnnotations(fileIndex).catch(() => null)
     setAnnotations(result?.status === 'ok' ? result.annotations : [])
   }, [])
+
+  // Folders for the initial page's recent list, most recent first.
+  const [recentFolders, setRecentFolders] = useState<RecentFolder[]>([])
+  const loadRecents = useCallback(async () => {
+    const folders = await jsonReader.getRecentFolders().catch(() => [])
+    setRecentFolders(folders)
+  }, [])
+
+  useEffect(() => {
+    void loadRecents()
+  }, [loadRecents])
 
   const applyOpenedFile = useCallback(
     (fileName: string, root: RootInfo, fileIndex: number | null): void => {
@@ -197,49 +212,79 @@ export default function App(): React.ReactElement {
     [folder, openFromFolder]
   )
 
+  const applyOpenResult = useCallback(
+    (result: OpenResponse, before: State) => {
+      // A folder open replaces the folder, so a queued panel click can no
+      // longer be honored.
+      pendingFolderIndexRef.current = null
+      if (result.status === 'canceled') {
+        loadingRef.current = false
+        setState(before)
+        return
+      }
+      if (result.status === 'error') {
+        setFolder(null)
+        setState({
+          view: 'error',
+          fileName: result.fileName,
+          message: result.error,
+          annotate: result.annotatable ? { fileIndex: null } : null
+        })
+        void refreshAnnotations(null)
+        loadingRef.current = false
+        return
+      }
+      void loadRecents()
+      if (result.status === 'folder') {
+        setFolder({ name: result.folderName, files: result.files, activeIndex: 0 })
+        void loadFolderFile(0)
+        return
+      }
+      setFolder(null)
+      applyOpenedFile(result.fileName, result.root, null)
+      loadingRef.current = false
+    },
+    [applyOpenedFile, loadFolderFile, loadRecents, refreshAnnotations]
+  )
+
   const pickFolder = useCallback(async () => {
     if (loadingRef.current) return
     const before = stateRef.current
     loadingRef.current = true
     setState({ view: 'loading' })
     const result = await jsonReader.openFolder()
-    // A dialog open replaces the folder, so a queued panel click can no
-    // longer be honored.
-    pendingFolderIndexRef.current = null
-    if (result.status === 'canceled') {
-      loadingRef.current = false
-      setState(before)
-      return
-    }
-    if (result.status === 'error') {
-      setFolder(null)
-      setState({
-        view: 'error',
-        fileName: result.fileName,
-        message: result.error,
-        annotate: result.annotatable ? { fileIndex: null } : null
-      })
-      void refreshAnnotations(null)
-      loadingRef.current = false
-      return
-    }
-    if (result.status === 'folder') {
-      setFolder({ name: result.folderName, files: result.files, activeIndex: 0 })
-      void loadFolderFile(0)
-      return
-    }
-    setFolder(null)
-    applyOpenedFile(result.fileName, result.root, null)
-    loadingRef.current = false
-  }, [applyOpenedFile, loadFolderFile, refreshAnnotations])
+    applyOpenResult(result, before)
+  }, [applyOpenResult])
+
+  const openRecentFolder = useCallback(
+    async (path: string) => {
+      if (loadingRef.current) return
+      const before = stateRef.current
+      loadingRef.current = true
+      setState({ view: 'loading' })
+      const result = await jsonReader.openRecentFolder(path)
+      applyOpenResult(result, before)
+    },
+    [applyOpenResult]
+  )
 
   useEffect(() => jsonReader.onOpenFolderRequested(() => void pickFolder()), [pickFolder])
 
-  // Adds an annotation, or removes the one already at the location.
+  // Adds an annotation — a whole value, or an exact selection span inside
+  // it — or removes the one already recorded there.
   const toggleAnnotation = useCallback(
-    async (fileIndex: number | null, itemIndex: number | null, path: JsonPath | null, message: string) => {
-      const decision = decideAnnotationToggle(annotations, itemIndex, path)
-      const request = { fileIndex, itemIndex, path }
+    async (
+      fileIndex: number | null,
+      itemIndex: number | null,
+      path: JsonPath | null,
+      message: string,
+      range?: AnnotationRange
+    ) => {
+      const decision =
+        range && path
+          ? decideRangeToggle(annotations, itemIndex, path, range)
+          : decideAnnotationToggle(annotations, itemIndex, path)
+      const request = { fileIndex, itemIndex, path, ...(range ? { range } : {}) }
       const result =
         decision.kind === 'add'
           ? await jsonReader.addAnnotation({ ...request, message }).catch(() => null)
@@ -354,7 +399,7 @@ export default function App(): React.ReactElement {
   const itemError = state.view === 'array' && 'error' in state.item ? state.item.error : ''
 
   return (
-    <div className={`app${zen ? ' zen' : ''}`}>
+    <div className={`app${zen ? ' zen' : ''}${osFullscreen ? ' os-fullscreen' : ''}`}>
       {!zen && (
         <header className="header">
           {(folder || fileName) && (
@@ -406,7 +451,13 @@ export default function App(): React.ReactElement {
         )}
 
         <main className="content" ref={contentRef}>
-          {state.view === 'empty' && <EmptyState onOpenFolder={() => void pickFolder()} />}
+          {state.view === 'empty' && (
+            <EmptyState
+              onOpenFolder={() => void pickFolder()}
+              onOpenRecent={(path) => void openRecentFolder(path)}
+              recentFolders={recentFolders}
+            />
+          )}
           {state.view === 'loading' && (
             <div className="center-state">
               <div className="spinner" />
@@ -436,8 +487,8 @@ export default function App(): React.ReactElement {
                 key={`${folder?.name ?? 'file'}:${state.fileName}`}
                 value={state.value}
                 annotation={{
-                  annotatedKeys: annotatedKeys(annotations, null),
-                  onToggle: (path) => void toggleAnnotation(fileIndex, null, path, '')
+                  annotations: annotationsForItem(annotations, null),
+                  onToggle: (path, range) => void toggleAnnotation(fileIndex, null, path, '', range)
                 }}
               />
             </div>
@@ -454,8 +505,8 @@ export default function App(): React.ReactElement {
                   key={`${folder?.name ?? 'file'}:${state.fileName}:${state.index}`}
                   item={state.item}
                   annotationView={{
-                    annotatedKeys: annotatedKeys(annotations, state.index),
-                    onToggle: (path) => void toggleAnnotation(fileIndex, state.index, path, '')
+                    annotations: annotationsForItem(annotations, state.index),
+                    onToggle: (path, range) => void toggleAnnotation(fileIndex, state.index, path, '', range)
                   }}
                   errorAnnotate={{
                     annotated: isAnnotated(annotations, state.index, null),
@@ -505,7 +556,15 @@ function ItemBody({
   return <JsonView value={item.value} annotation={annotationView} />
 }
 
-function EmptyState({ onOpenFolder }: { onOpenFolder: () => void }): React.ReactElement {
+function EmptyState({
+  onOpenFolder,
+  onOpenRecent,
+  recentFolders
+}: {
+  onOpenFolder: () => void
+  onOpenRecent: (path: string) => void
+  recentFolders: RecentFolder[]
+}): React.ReactElement {
   return (
     <div className="center-state">
       <div className="glyph">{'{ }'}</div>
@@ -516,6 +575,21 @@ function EmptyState({ onOpenFolder }: { onOpenFolder: () => void }): React.React
       <p className="hint">
         or press <kbd>{isMac ? '⌘O' : 'Ctrl+O'}</kbd>
       </p>
+      {recentFolders.length > 0 && (
+        <>
+          <p className="recents-label">Recent folders</p>
+          <ul className="recent-folders">
+            {recentFolders.map((folder) => (
+              <li key={folder.path}>
+                <button className="recent-folder" title={folder.path} onClick={() => onOpenRecent(folder.path)}>
+                  <span className="recent-folder-name">{folder.name}</span>
+                  <span className="recent-folder-path">{folder.path}</span>
+                </button>
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
     </div>
   )
 }

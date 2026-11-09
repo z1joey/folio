@@ -1,14 +1,20 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
-import type { AnnotationsResponse, OpenFileResponse, OpenResponse, SearchResponse } from '../shared/types'
+import { basename, join } from 'node:path'
+import type { AnnotationsResponse, OpenFileResponse, OpenResponse, RecentFolder, SearchResponse } from '../shared/types'
 
 // Electron is replaced wholesale: only the pieces index.ts touches exist,
 // and the dialog is driven by each test. The file system stays real, so
 // folder scanning and JSON opening run against actual temp directories.
 const { appMock, browserWindowMock, dialogMock, ipcMainMock, menuMock } = vi.hoisted(() => ({
-  appMock: { whenReady: vi.fn(() => Promise.resolve()), on: vi.fn(), quit: vi.fn() },
+  // getPath is exercised at handler runtime, long after `dir` exists.
+  appMock: {
+    whenReady: vi.fn(() => Promise.resolve()),
+    on: vi.fn(),
+    quit: vi.fn(),
+    getPath: vi.fn(() => join(dir, 'userdata'))
+  },
   // A `function` implementation so `new BrowserWindow(...)` works and
   // returns this window object (constructors keep an explicit return value).
   browserWindowMock: vi.fn(function () {
@@ -40,6 +46,7 @@ const handlers = new Map<string, (...args: unknown[]) => Promise<unknown>>()
 beforeAll(async () => {
   vi.stubGlobal('__dirname', process.cwd())
   dir = await mkdtemp(join(tmpdir(), 'json-reader-main-'))
+  await mkdir(join(dir, 'userdata'), { recursive: true })
   await import('./index')
   // The module wires the menu and the window once app.whenReady() settles.
   await vi.waitFor(() => expect(browserWindowMock).toHaveBeenCalled())
@@ -81,10 +88,23 @@ const addAnnotation = (request: unknown): Promise<AnnotationsResponse> =>
   handlers.get('json:add-annotation')!(undefined, request) as Promise<AnnotationsResponse>
 const removeAnnotation = (request: unknown): Promise<AnnotationsResponse> =>
   handlers.get('json:remove-annotation')!(undefined, request) as Promise<AnnotationsResponse>
+const getRecentFolders = (): Promise<RecentFolder[]> =>
+  handlers.get('json:get-recent-folders')!(undefined) as Promise<RecentFolder[]>
+const openRecentFolder = (path: string): Promise<OpenResponse> =>
+  handlers.get('json:open-recent-folder')!(undefined, path) as Promise<OpenResponse>
 
 async function readSidecar(folder: string, sourceName: string): Promise<Record<string, unknown>> {
   return JSON.parse(await readFile(join(folder, sourceName.replace(/\.json$/i, '') + '.annotations.json'), 'utf8'))
 }
+
+describe('window setup', () => {
+  it('wires the fullscreen events the renderer listens for', () => {
+    const win = browserWindowMock.mock.results[0]?.value as { on: ReturnType<typeof vi.fn> }
+    const events = win.on.mock.calls.map((call) => call[0])
+    expect(events).toContain('enter-full-screen')
+    expect(events).toContain('leave-full-screen')
+  })
+})
 
 describe('open folder', () => {
   it('only registers the folder-opening dialog flow', () => {
@@ -264,6 +284,53 @@ describe('open folder', () => {
   })
 })
 
+describe('recent folders', () => {
+  const storageFile = (): string => join(dir, 'userdata', 'recent-folders.json')
+  const seedRecents = async (paths: string[]): Promise<void> => {
+    await writeFile(
+      storageFile(),
+      JSON.stringify(paths.map((p) => ({ path: p, name: basename(p), lastOpenedAt: '2026-01-01T00:00:00.000Z' })))
+    )
+  }
+
+  it('records opened folders most recent first', async () => {
+    const a = await folderFixture('recents-a', { 'x.json': '[1]', 'y.json': '[2]' })
+    const b = await folderFixture('recents-b', { 'x.json': '[1]', 'y.json': '[2]' })
+    pick(a)
+    await openFolder()
+    pick(b)
+    await openFolder()
+    const folders = await getRecentFolders()
+    expect(folders.slice(0, 2).map((f) => f.name)).toEqual(['recents-b', 'recents-a'])
+  })
+
+  it('reopens a folder by path without the dialog', async () => {
+    const folders = await getRecentFolders()
+    const result = await openRecentFolder(folders[0].path)
+    expect(result).toEqual({ status: 'folder', folderName: 'recents-b', files: ['x.json', 'y.json'] })
+    expect(dialogMock.showOpenDialog).not.toHaveBeenCalled()
+  })
+
+  it('keeps at most three entries, most recent first', async () => {
+    await seedRecents(['/r/one', '/r/two', '/r/three'])
+    const four = await folderFixture('recents-four', { 'x.json': '[1]', 'y.json': '[2]' })
+    pick(four)
+    await openFolder()
+    const folders = await getRecentFolders()
+    expect(folders).toHaveLength(3)
+    expect(folders.map((f) => f.name)).toEqual(['recents-four', 'one', 'two'])
+  })
+
+  it('drops a vanished folder from the recents when reopened', async () => {
+    const ghost = join(dir, 'recents-ghost')
+    await seedRecents([ghost, '/r/two'])
+    const result = await openRecentFolder(ghost)
+    expect(result).toMatchObject({ status: 'error' })
+    const folders: RecentFolder[] = await getRecentFolders()
+    expect(folders.map((f) => f.path)).not.toContain(ghost)
+  })
+})
+
 describe('annotations', () => {
   // Lines are numbered so annotation locations are predictable:
   // the "error" value of item 2 sits on line 6.
@@ -398,6 +465,48 @@ describe('annotations', () => {
     expect(result.status).toBe('ok')
     if (result.status !== 'ok') return
     expect(result.annotations[0]).toMatchObject({ itemIndex: 1, path: null, line: 1 })
+  })
+
+  it('records selection ranges precisely and trims overlaps on one value', async () => {
+    const folder = await folderFixture('annotations-ranges', { 'a.json': '[{"msg": "hello brave world"}]', 'b.json': '[1]' })
+    pick(folder)
+    await openFolder()
+    // Two non-overlapping word selections on the same value.
+    const first = await addAnnotation({
+      fileIndex: 0, itemIndex: 0, path: ['msg'], message: 'brave', range: { start: 6, end: 11 }
+    })
+    expect(first.status, JSON.stringify(first)).toBe('ok')
+    if (first.status !== 'ok') return
+    expect(first.annotations).toHaveLength(1)
+    const second = await addAnnotation({
+      fileIndex: 0, itemIndex: 0, path: ['msg'], message: 'world', range: { start: 12, end: 17 }
+    })
+    expect(second.status).toBe('ok')
+    if (second.status !== 'ok') return
+    expect(second.annotations).toHaveLength(2)
+    // An overlapping selection replaces the covered parts: [4, 9) cuts
+    // [6, 11) down to [9, 11).
+    const third = await addAnnotation({
+      fileIndex: 0, itemIndex: 0, path: ['msg'], message: 'hello', range: { start: 4, end: 9 }
+    })
+    expect(third.status).toBe('ok')
+    if (third.status !== 'ok') return
+    const brave = third.annotations.find((a) => a.message === 'brave')
+    expect(brave?.range).toEqual({ start: 9, end: 11 })
+    // Removing one range leaves the other untouched; removing an exact
+    // missing range is a no-op.
+    const removed = await removeAnnotation({
+      fileIndex: 0, itemIndex: 0, path: ['msg'], range: { start: 4, end: 9 }
+    })
+    expect(removed.status).toBe('ok')
+    if (removed.status !== 'ok') return
+    expect(removed.annotations.map((a) => a.range)).toEqual([{ start: 9, end: 11 }, { start: 12, end: 17 }])
+    const again = await removeAnnotation({
+      fileIndex: 0, itemIndex: 0, path: ['msg'], range: { start: 4, end: 9 }
+    })
+    expect(again.status).toBe('ok')
+    if (again.status !== 'ok') return
+    expect(again.annotations.map((a) => a.range)).toEqual([{ start: 9, end: 11 }, { start: 12, end: 17 }])
   })
 
   it('annotates a file that failed to open, marking the error annotatable', async () => {

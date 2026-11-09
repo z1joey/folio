@@ -1,6 +1,6 @@
 import { readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { randomUUID } from 'node:crypto'
-import type { Annotation, AnnotationList } from '../shared/types'
+import type { Annotation, AnnotationList, AnnotationRange } from '../shared/types'
 import { pathKey } from '../shared/annotationPath'
 
 /** Raw JSON excerpts longer than this are ellipsized in annotations. */
@@ -42,7 +42,17 @@ function isValidAnnotation(value: unknown): value is Annotation {
   if (a.byteOffset !== null && typeof a.byteOffset !== 'number') return false
   if (a.snippet !== null && typeof a.snippet !== 'string') return false
   if (typeof a.message !== 'string') return false
+  if (a.range !== undefined && !isValidRange(a.range)) return false
   return typeof a.createdAt === 'string'
+}
+
+/** A valid selection span: integer offsets with `start` strictly before `end`. */
+export function isValidRange(value: unknown): value is AnnotationRange {
+  if (typeof value !== 'object' || value === null) return false
+  const r = value as Record<string, unknown>
+  return (
+    isIndex(r.start) && isIndex(r.end) && r.start < r.end
+  )
 }
 
 function isIndex(value: unknown): value is number {
@@ -88,13 +98,44 @@ export async function readAnnotationList(sidecarPath: string, sourceFileName: st
 }
 
 /**
- * Adds an annotation, replacing any existing annotation of the same
- * location (same item and path) so a location is never recorded twice.
+ * Adds an annotation. Semantics depend on its shape:
+ *
+ * - A ranged annotation (a precise selection) joins its location, but the
+ *   ranges on that value stay non-overlapping: existing spans are trimmed
+ *   to the parts the new span does not cover, and fully covered ones are
+ *   dropped.
+ * - A whole-value annotation (errors, legacy marks) replaces every
+ *   annotation at the same location, so a location is never recorded twice.
  */
 export function withAnnotation(list: AnnotationList, annotation: Annotation): AnnotationList {
   const key = locationKey(annotation.itemIndex, annotation.path)
-  const annotations = [...list.annotations.filter((a) => locationKey(a.itemIndex, a.path) !== key), annotation]
-  return { ...list, annotations, updatedAt: new Date().toISOString() }
+  const atLocation = list.annotations.filter((a) => locationKey(a.itemIndex, a.path) === key)
+  const elsewhere = list.annotations.filter((a) => locationKey(a.itemIndex, a.path) !== key)
+  let kept: Annotation[]
+  if (annotation.range) {
+    const cut = annotation.range
+    kept = atLocation.flatMap((a) => {
+      if (!a.range) return [a]
+      // Each surviving piece keeps the annotation's identity, only the
+      // span shrinks to what the new selection does not cover.
+      return subtractRange(a.range, cut).map((piece) => ({ ...a, range: piece }))
+    })
+  } else {
+    kept = []
+  }
+  return { ...list, annotations: [...elsewhere, ...kept, annotation], updatedAt: new Date().toISOString() }
+}
+
+/**
+ * The part of `existing` that lies outside `cut`: zero pieces when fully
+ * covered, one when the cut starts or ends inside, two when the cut falls
+ * strictly inside. Non-overlapping ranges pass through untouched.
+ */
+function subtractRange(existing: AnnotationRange, cut: AnnotationRange): AnnotationRange[] {
+  if (existing.end <= cut.start || existing.start >= cut.end) return [existing]
+  const left = existing.start < cut.start ? { start: existing.start, end: cut.start } : null
+  const right = existing.end > cut.end ? { start: cut.end, end: existing.end } : null
+  return left && right ? [left, right] : (left ? [left] : right ? [right] : [])
 }
 
 export function withoutAnnotation(list: AnnotationList, id: string): AnnotationList {
@@ -116,6 +157,27 @@ export function annotationIdAt(
 }
 
 /**
+ * Finds the id of the annotation recorded at a location for one exact
+ * span: a range matches only that ranged annotation, a null range matches
+ * only the whole-value one. Returns null when nothing matches.
+ */
+export function annotationIdAtRange(
+  list: AnnotationList,
+  itemIndex: number | null,
+  path: readonly (string | number)[] | null,
+  range: AnnotationRange | null
+): string | null {
+  const key = locationKey(itemIndex, path)
+  const match = list.annotations.find(
+    (a) =>
+      locationKey(a.itemIndex, a.path) === key &&
+      ((range === null && a.range === undefined) ||
+        (range !== null && a.range !== undefined && a.range.start === range.start && a.range.end === range.end))
+  )
+  return match?.id ?? null
+}
+
+/**
  * Validates the location fields shared by the annotation requests. Returns
  * null when the request shape is wrong; `null` location fields are valid
  * (they mean "the file as a whole").
@@ -124,6 +186,7 @@ export function parseAnnotationRequest(request: unknown): {
   fileIndex: number | null
   itemIndex: number | null
   path: (string | number)[] | null
+  range: AnnotationRange | null
 } | null {
   if (typeof request !== 'object' || request === null) return null
   const r = request as Record<string, unknown>
@@ -135,7 +198,14 @@ export function parseAnnotationRequest(request: unknown): {
   const itemIndex = optionalIndex(r.itemIndex)
   if (fileIndex === undefined || itemIndex === undefined) return null
   if (r.path !== null && r.path !== undefined && !isValidPath(r.path)) return null
-  return { fileIndex, itemIndex, path: (r.path as (string | number)[] | null) ?? null }
+  // An absent or null range marks the whole value; a present one must be
+  // a well-formed span, and a malformed one spoils the whole request.
+  let range: AnnotationRange | null = null
+  if (r.range !== null && r.range !== undefined) {
+    if (!isValidRange(r.range)) return null
+    range = r.range as AnnotationRange
+  }
+  return { fileIndex, itemIndex, path: (r.path as (string | number)[] | null) ?? null, range }
 }
 
 /**
@@ -174,6 +244,7 @@ export function newAnnotation(fields: {
   byteOffset: number | null
   snippet: string | null
   message: string
+  range?: AnnotationRange
 }): Annotation {
   return { id: randomUUID(), createdAt: new Date().toISOString(), ...fields }
 }

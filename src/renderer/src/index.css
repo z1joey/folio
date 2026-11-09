@@ -83,6 +83,12 @@ body {
   padding-left: 80px; /* room for the traffic lights */
 }
 
+/* Native macOS fullscreen hides the traffic lights: reclaim their space
+   so the header tools sit where the windowed layout's gap was. */
+.app.os-fullscreen .header {
+  padding-left: 16px;
+}
+
 .app-version {
   color: var(--muted);
   font-size: 12px;
@@ -486,6 +492,67 @@ kbd {
   user-select: none;
 }
 
+/* ── Recent folders on the initial page ─────────────────────────────── */
+
+.recents-label {
+  margin-top: 20px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--key);
+}
+
+.recent-folders {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: min(440px, 100%);
+}
+
+.recent-folder {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 1px;
+  width: 100%;
+  text-align: left;
+  font: inherit;
+  background: var(--panel);
+  border: 1px solid var(--hairline);
+  border-radius: 8px;
+  padding: 8px 12px;
+  cursor: pointer;
+}
+
+.recent-folder:hover {
+  border-color: var(--hairline-strong);
+}
+
+.recent-folder:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.recent-folder-name {
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--fg);
+}
+
+.recent-folder-path {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--faint);
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .error-title {
   font-size: 17px;
   font-weight: 600;
@@ -538,7 +605,8 @@ kbd {
   gap: 2px;
 }
 
-/* The small caps label above its value. */
+/* The small caps label above its value. Keys are structure, not content:
+   they never join a selection. */
 .jv-key {
   font-size: 11px;
   font-weight: 600;
@@ -546,6 +614,7 @@ kbd {
   text-transform: uppercase;
   color: var(--key);
   overflow-wrap: anywhere;
+  user-select: none;
 }
 
 /* The value area anchors its annotate control at its top-right corner. */
@@ -747,6 +816,7 @@ kbd {
   font-size: 12.5px;
   color: var(--key);
   overflow-wrap: break-word;
+  user-select: none;
 }
 
 .jv-pair-sep {
@@ -780,6 +850,16 @@ kbd {
   border-radius: 6px;
 }
 
+/* A precise selection inside a value's text: the mark hugs the words it
+   covers, no box around the whole entry. */
+.jv-mark {
+  background: var(--highlight);
+  box-shadow: 0 0 0 1px var(--highlight-edge);
+  border-radius: 3px;
+  padding: 0 1px;
+  color: inherit;
+}
+
 .jv-field.jv-annotated {
   padding: 2px 8px;
   margin: -2px -8px;
@@ -803,78 +883,47 @@ kbd {
   margin: -1px -4px;
 }
 
-/* The per-entry control: invisible until the pointer is on the entry's
-   value; annotated entries keep their ✕ always available. */
-.annotate-control {
-  flex: none;
-  font: inherit;
-  font-size: 11px;
-  line-height: 1.4;
-  color: var(--muted);
+/* ── Selection context menu ─────────────────────────────────────────── */
+
+/* Right-clicking a selection (or an annotated span) offers copy plus
+   annotate/remove; the panel follows the pointer and closes on click,
+   Escape or scroll. Every annotation lives and dies through this menu —
+   there are no annotate buttons on the page. */
+
+/* Right-clicking a selection inside a value offers copy and annotate;
+   the panel follows the pointer and closes on click, Escape or scroll. */
+.jv-menu {
+  position: fixed;
+  z-index: 100;
+  min-width: 160px;
+  padding: 4px;
   background: var(--panel);
   border: 1px solid var(--hairline-strong);
-  border-radius: 5px;
-  padding: 1px 7px;
-  cursor: pointer;
-  opacity: 0;
-  transition: opacity 0.12s ease;
+  border-radius: 9px;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.18);
 }
 
-.jv-list > li > .annotate-control,
-.jv-value > .annotate-control {
-  position: absolute;
-  right: 8px;
-  top: 0;
-}
-
-.jv-value > .annotate-control {
-  right: 0;
-}
-
-/* On the inline run the control floats just above the pill or pair it
-   belongs to, clear of the flowing line. */
-.jv-pill > .annotate-control,
-.jv-pair > .annotate-control {
-  position: absolute;
-  right: 0;
-  bottom: calc(100% + 2px);
-}
-
-/* An already annotated pill keeps its ✕ inside, where it can neither
-   cover the line above nor a neighbouring pill. */
-.jv-pill.jv-annotated > .annotate-control,
-.jv-pair.jv-annotated > .annotate-control {
-  position: static;
-  align-self: center;
-  margin-left: 2px;
-}
-
-/* The control shows only while the pointer is on the innermost hovered
-   entry's value: `:hover` also matches every enclosing entry, so the
-   `:has` guard keeps an outer entry's button hidden whenever a nested
-   entry — structured or inline — is the one being pointed at. Keys never
-   reveal a control. */
-.jv-value:hover:not(:has(.jv-field:hover, .jv-list > li:hover, .jv-pill:hover, .jv-pair:hover)) > .annotate-control,
-.jv-list > li:hover:not(:has(.jv-field:hover, .jv-list > li:hover, .jv-pill:hover, .jv-pair:hover)) > .annotate-control,
-.jv-pill:hover:not(:has(.jv-field:hover, .jv-list > li:hover, .jv-pill:hover, .jv-pair:hover)) > .annotate-control,
-.jv-pair:hover:not(:has(.jv-field:hover, .jv-list > li:hover, .jv-pill:hover, .jv-pair:hover)) > .annotate-control,
-.annotate-control:focus-visible,
-.annotate-control.remove {
-  opacity: 1;
-}
-
-.annotate-control:hover {
+.jv-menu-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  font: inherit;
+  font-size: 13px;
   color: var(--fg);
-  border-color: var(--faint);
+  background: none;
+  border: none;
+  border-radius: 6px;
+  padding: 6px 10px;
+  cursor: pointer;
 }
 
-.annotate-control.remove {
-  color: var(--danger);
+.jv-menu-item:hover {
+  background: var(--bg);
 }
 
-.annotate-control:focus-visible {
+.jv-menu-item:focus-visible {
   outline: 2px solid var(--accent);
-  outline-offset: 1px;
+  outline-offset: -2px;
 }
 
 /* An annotated error message keeps the same highlighter treatment. */

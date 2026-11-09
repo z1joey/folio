@@ -1,10 +1,11 @@
 import { app, BrowserWindow, dialog, ipcMain, Menu, nativeTheme } from 'electron'
-import { readdir, readFile, stat } from 'node:fs/promises'
+import { readdir, readFile, stat, writeFile } from 'node:fs/promises'
 import { basename, join } from 'node:path'
 import { JsonFile, JsonError, searchText } from './jsonFile'
+import { parseRecentFolders, withRecentFolder, type RecentFolder } from './recentFolders'
 import {
   annotationFilePathFor,
-  annotationIdAt,
+  annotationIdAtRange,
   byteOffsetAt,
   excerpt,
   isAnnotationFileName,
@@ -75,6 +76,11 @@ function createWindow(): void {
       nodeIntegration: false
     }
   })
+
+  // Native macOS fullscreen hides the traffic lights; the renderer gets
+  // told so it can reclaim the space they used to reserve.
+  mainWindow.on('enter-full-screen', () => mainWindow?.webContents.send('fullscreen-changed', true))
+  mainWindow.on('leave-full-screen', () => mainWindow?.webContents.send('fullscreen-changed', false))
 
   mainWindow.on('closed', () => {
     mainWindow = null
@@ -194,6 +200,8 @@ async function openFolderPath(path: string): Promise<OpenResponse> {
       error: 'No JSON files found in this folder. Please choose another folder.'
     }
   }
+  // A successful open puts the folder at the front of the recents.
+  await recordRecentFolder(path)
   // A single JSON file behaves like a plain file open: no folder panel.
   if (names.length === 1) {
     await clearFolderSearchCache()
@@ -214,10 +222,59 @@ async function showAndOpenFolder(win: BrowserWindow): Promise<OpenResponse> {
   return openFolderPath(picked.filePaths[0])
 }
 
+/* ── Recently opened folders ────────────────────────────────────────── */
+
+/* A small JSON file in userData: recents are a convenience and must
+   never break startup, so every failure reads as "no recents". */
+function recentFoldersFile(): string {
+  return join(app.getPath('userData'), 'recent-folders.json')
+}
+
+async function readRecentFolders(): Promise<RecentFolder[]> {
+  try {
+    return parseRecentFolders(await readFile(recentFoldersFile(), 'utf8'))
+  } catch {
+    return []
+  }
+}
+
+async function writeRecentFolders(folders: RecentFolder[]): Promise<void> {
+  await writeFile(recentFoldersFile(), JSON.stringify(folders, null, 2) + '\n', 'utf8')
+}
+
+async function recordRecentFolder(path: string): Promise<void> {
+  try {
+    await writeRecentFolders(withRecentFolder(await readRecentFolders(), path))
+  } catch {
+    // Unwritable recents are not worth reporting.
+  }
+}
+
+async function forgetRecentFolder(path: string): Promise<void> {
+  try {
+    await writeRecentFolders((await readRecentFolders()).filter((folder) => folder.path !== path))
+  } catch {
+    // Same: not worth reporting.
+  }
+}
+
 ipcMain.handle('json:open-folder', (): Promise<OpenResponse> => {
   const win = mainWindow
   if (!win) return Promise.resolve({ status: 'canceled' })
   return showAndOpenFolder(win)
+})
+
+ipcMain.handle('json:get-recent-folders', (): Promise<RecentFolder[]> => readRecentFolders())
+
+ipcMain.handle('json:open-recent-folder', async (_event, path: unknown): Promise<OpenResponse> => {
+  if (typeof path !== 'string' || path.length === 0) return { status: 'canceled' }
+  const result = await openFolderPath(path)
+  // A recents entry pointing at a vanished or unreadable folder helps no
+  // one: drop it so the initial page stays honest.
+  if (result.status === 'error' && result.error === 'The folder could not be read.') {
+    await forgetRecentFolder(path)
+  }
+  return result
 })
 
 ipcMain.handle('json:open-file', (_event, index: unknown): Promise<OpenFileResponse> => {
@@ -475,7 +532,13 @@ ipcMain.handle('json:add-annotation', async (_event, request: unknown): Promise<
   // to the value's own text when the reader sent no note.
   const message = rawMessage.trim() || located.snippet || ''
   if (!message) return { status: 'error', message: 'An annotation needs a message.' }
-  const annotation: Annotation = newAnnotation({ itemIndex: fields.itemIndex, path: fields.path, ...located, message })
+  const annotation: Annotation = newAnnotation({
+    itemIndex: fields.itemIndex,
+    path: fields.path,
+    ...located,
+    message,
+    range: fields.range ?? undefined
+  })
   return respondWithAnnotations(sourcePath, (list) => withAnnotation(list, annotation))
 })
 
@@ -485,7 +548,7 @@ ipcMain.handle('json:remove-annotation', async (_event, request: unknown): Promi
   const sourcePath = annotationTargetPath(fields.fileIndex)
   if (!sourcePath) return { status: 'error', message: 'No file is open.' }
   return respondWithAnnotations(sourcePath, (list) => {
-    const id = annotationIdAt(list, fields.itemIndex, fields.path)
+    const id = annotationIdAtRange(list, fields.itemIndex, fields.path, fields.range)
     return id ? withoutAnnotation(list, id) : list
   })
 })

@@ -1,21 +1,42 @@
-import { useState, type ReactNode } from 'react'
+import { useEffect, useState, type MouseEvent, type ReactNode } from 'react'
 import { isCompact } from './compact'
-import type { JsonPath } from '../../shared/types'
+import { decideContextMenu, type ContextMenuDecision } from './contextMenu'
+import { splitSegments, textOffsetBefore } from './markText'
+import type { Annotation, AnnotationRange, JsonPath } from '../../shared/types'
 import { pathKey } from '../../shared/annotationPath'
 
 /** Strings longer than this are truncated until the reader asks for the rest. */
 const LONG_STRING = 5000
 
 /**
- * What the tree needs to render annotations: which locations of the value
- * on screen are annotated, and what to do when the reader presses an
- * annotate control. Absent when the tree renders without annotation support.
+ * What the tree needs to render annotations: every annotation recorded for
+ * the value or item on screen, and what to do when the reader acts on one.
+ * Absent when the tree renders without annotation support.
  */
 export type AnnotationView = {
-  /** Path keys (see `pathKey`) of the annotated locations in this value. */
-  annotatedKeys: Set<string>
-  /** Called with the path of the entry whose control was pressed. */
-  onToggle: (path: JsonPath) => void
+  /** All annotations of the shown value or item (already item-scoped). */
+  annotations: Annotation[]
+  /** Toggles the annotation at a path, or at an exact span inside it. */
+  onToggle: (path: JsonPath, range?: AnnotationRange) => void
+}
+
+/** One opened context menu: where it sits and what it decided to offer. */
+type MenuState = { x: number; y: number; decision: ContextMenuDecision }
+
+/** Ranges recorded for exactly one value path. */
+function rangesFor(path: JsonPath, annotation?: AnnotationView): AnnotationRange[] {
+  if (!annotation) return []
+  const key = pathKey(path)
+  return annotation.annotations
+    .filter((a) => a.path !== null && a.range !== undefined && pathKey(a.path) === key)
+    .map((a) => a.range!)
+}
+
+/** True when a whole-value annotation (error, legacy mark) sits on a path. */
+function wholeAnnotated(path: JsonPath, annotation?: AnnotationView): boolean {
+  if (!annotation) return false
+  const key = pathKey(path)
+  return annotation.annotations.some((a) => a.range === undefined && pathKey(a.path) === key)
 }
 
 /**
@@ -24,16 +45,161 @@ export type AnnotationView = {
  * fold behind a count summary. Leaf-shaped containers — primitive arrays,
  * scalar records, machine-nested grouping — skip the panel and read as a
  * compact inline run instead.
+ *
+ * Annotating works through the selection context menu: select text inside
+ * one value, right-click, and the menu offers copy plus annotate for that
+ * exact span; annotated spans show as highlighter marks. Values carry
+ * their path in `data-json-path` so the menu can find it.
  */
 export function JsonView({ value, annotation }: { value: unknown; annotation?: AnnotationView }): ReactNode {
-  return <div className="jv">{renderNode(value, [], annotation)}</div>
+  const [menu, setMenu] = useState<MenuState | null>(null)
+
+  useEffect(() => {
+    if (!menu) return
+    const close = () => setMenu(null)
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') close()
+    }
+    document.addEventListener('click', close)
+    document.addEventListener('keydown', onKeyDown)
+    document.addEventListener('scroll', close, true)
+    return () => {
+      document.removeEventListener('click', close)
+      document.removeEventListener('keydown', onKeyDown)
+      document.removeEventListener('scroll', close, true)
+    }
+  }, [menu])
+
+  const handleContextMenu = (event: MouseEvent) => {
+    const selection = window.getSelection()
+    const selectionText = (selection?.toString() ?? '').trim()
+    if (!selection || selection.rangeCount !== 1) return // native menu
+    const target = event.target as Element
+    const valueEl = target.closest('[data-json-path]')
+    // The position (a selection span, or the collapsed caret) must resolve
+    // to one character position inside one value.
+    let range: AnnotationRange | null = null
+    const domRange = selection.getRangeAt(0)
+    if (valueEl && valueEl.contains(domRange.startContainer) && valueEl.contains(domRange.endContainer)) {
+      range = selectionRangeInElement(valueEl, domRange)
+    }
+    const decision = decideContextMenu({
+      selectionText,
+      valueText: valueEl?.textContent ?? null,
+      pathText: valueEl?.getAttribute('data-json-path') ?? null,
+      withinKey: target.closest('.jv-key, .jv-pair-key, .jv-summary') !== null,
+      range,
+      hasSelection: selectionText.length > 0,
+      annotations: annotation?.annotations ?? []
+    })
+    if (decision.kind === 'none') return
+    event.preventDefault()
+    setMenu({ x: event.clientX, y: event.clientY, decision })
+  }
+
+  return (
+    <div className="jv" onContextMenu={handleContextMenu}>
+      {renderNode(value, [], annotation)}
+      {menu && <ValueMenu menu={menu} onClose={() => setMenu(null)} onToggle={annotation?.onToggle} />}
+    </div>
+  )
+}
+
+/** The opened menu: copy always, then annotate or remove per the target. */
+function ValueMenu({
+  menu,
+  onClose,
+  onToggle
+}: {
+  menu: MenuState
+  onClose: () => void
+  onToggle?: (path: JsonPath, range?: AnnotationRange) => void
+}): ReactNode {
+  const decision = menu.decision
+  const items: { label: string; run: () => void }[] = []
+  // The menu only opens on a non-none decision, but the type keeps the
+  // variant honest: every branch narrows before it touches the payload.
+  if (decision.kind !== 'none') {
+    items.push({ label: 'Copy', run: () => void navigator.clipboard.writeText(decision.copyText) })
+  }
+  if (decision.kind === 'copy-annotate' && onToggle) {
+    const { path, range } = decision
+    items.push({ label: 'Annotate', run: () => onToggle(path, range) })
+  }
+  if (decision.kind === 'copy-remove' && onToggle) {
+    const { path, range } = decision
+    items.push({ label: 'Remove annotation', run: () => onToggle(path, range ?? undefined) })
+  }
+  // Keep the panel on screen when the pointer works near an edge.
+  const left = Math.min(menu.x, window.innerWidth - 190)
+  const top = Math.min(menu.y, window.innerHeight - 40 * items.length - 12)
+  return (
+    <div className="jv-menu" role="menu" style={{ left, top }}>
+      {items.map((item) => (
+        <button
+          key={item.label}
+          type="button"
+          role="menuitem"
+          className="jv-menu-item"
+          onClick={() => {
+            item.run()
+            onClose()
+          }}
+        >
+          {item.label}
+        </button>
+      ))}
+    </div>
+  )
+}
+
+/**
+ * Maps a DOM selection range onto character offsets in the element's own
+ * text. Positions inside a child element (an annotated mark) resolve
+ * through the text its earlier siblings contain. Returns null when either
+ * edge falls outside the element.
+ */
+function selectionRangeInElement(el: Element, domRange: Range): AnnotationRange | null {
+  const children = Array.from(el.childNodes)
+  const childTexts = children.map((c) => c.textContent ?? '')
+  const resolve = (node: Node, offset: number): number | null => {
+    if (node === el) return textOffsetBefore(childTexts, offset, 0)
+    const index = children.findIndex((c) => c === node || c.contains(node))
+    if (index === -1) return null
+    let within = offset
+    const top = children[index]
+    if (node !== top) {
+      let inner = 0
+      let done = false
+      const walk = (parent: Node): void => {
+        for (const child of Array.from(parent.childNodes)) {
+          if (done) return
+          if (child === node) {
+            within = inner + offset
+            done = true
+            return
+          }
+          inner += child.textContent?.length ?? 0
+          walk(child)
+        }
+      }
+      walk(top)
+      if (!done) return null
+    }
+    return textOffsetBefore(childTexts, index, within)
+  }
+  const start = resolve(domRange.startContainer, domRange.startOffset)
+  const end = resolve(domRange.endContainer, domRange.endOffset)
+  // A collapsed range is the caret: a valid point annotation position.
+  if (start === null || end === null) return null
+  return { start: Math.min(start, end), end: Math.max(start, end) }
 }
 
 function renderNode(value: unknown, path: JsonPath, annotation?: AnnotationView): ReactNode {
-  if (value === null) return <span className="jv-null">null</span>
-  if (typeof value === 'string') return <StringValue text={value} />
-  if (typeof value === 'number') return <span className="jv-number">{String(value)}</span>
-  if (typeof value === 'boolean') return <span className="jv-boolean">{String(value)}</span>
+  if (value === null) return <span className="jv-null" data-json-path={JSON.stringify(path)}>null</span>
+  if (typeof value === 'string') return <StringValue text={value} path={path} ranges={rangesFor(path, annotation)} />
+  if (typeof value === 'number') return <span className="jv-number" data-json-path={JSON.stringify(path)}>{String(value)}</span>
+  if (typeof value === 'boolean') return <span className="jv-boolean" data-json-path={JSON.stringify(path)}>{String(value)}</span>
 
   if (Array.isArray(value)) {
     if (value.length === 0) return <Empty text="Empty array" />
@@ -43,10 +209,9 @@ function renderNode(value: unknown, path: JsonPath, annotation?: AnnotationView)
         <ul className="jv-list">
           {value.map((item, index) => {
             const itemPath: JsonPath = [...path, index]
-            const annotated = annotation?.annotatedKeys.has(pathKey(itemPath)) ?? false
+            const annotated = wholeAnnotated(itemPath, annotation)
             return (
-              <li key={index} className={annotated ? 'jv-annotated' : undefined}>
-                {annotation && <AnnotateControl annotated={annotated} onToggle={() => annotation.onToggle(itemPath)} />}
+              <li key={index} className={annotated ? 'jv-annotated' : undefined} data-json-path={JSON.stringify(itemPath)}>
                 {renderNode(item, itemPath, annotation)}
               </li>
             )
@@ -64,12 +229,11 @@ function renderNode(value: unknown, path: JsonPath, annotation?: AnnotationView)
       <div className="jv-fields">
         {entries.map(([key, entryValue]) => {
           const fieldPath: JsonPath = [...path, key]
-          const annotated = annotation?.annotatedKeys.has(pathKey(fieldPath)) ?? false
+          const annotated = wholeAnnotated(fieldPath, annotation)
           return (
             <div className={`jv-field${annotated ? ' jv-annotated' : ''}`} key={key}>
               <div className="jv-key">{key === '' ? '""' : key}</div>
-              <div className="jv-value">
-                {annotation && <AnnotateControl annotated={annotated} onToggle={() => annotation.onToggle(fieldPath)} />}
+              <div className="jv-value" data-json-path={JSON.stringify(fieldPath)}>
                 {renderNode(entryValue, fieldPath, annotation)}
               </div>
             </div>
@@ -106,10 +270,9 @@ function InlineArray({
     <span className="jv-inline">
       {value.map((item, index) => {
         const itemPath: JsonPath = [...path, index]
-        const annotated = annotation?.annotatedKeys.has(pathKey(itemPath)) ?? false
+        const annotated = wholeAnnotated(itemPath, annotation)
         return (
-          <span key={index} className={`jv-pill${annotated ? ' jv-annotated' : ''}`}>
-            {annotation && <AnnotateControl annotated={annotated} onToggle={() => annotation.onToggle(itemPath)} />}
+          <span key={index} className={`jv-pill${annotated ? ' jv-annotated' : ''}`} data-json-path={JSON.stringify(itemPath)}>
             {renderInlineValue(item, itemPath, annotation)}
           </span>
         )
@@ -136,11 +299,10 @@ function InlineObject({
     <span className="jv-inline">
       {entries.map(([key, entryValue]) => {
         const fieldPath: JsonPath = [...path, key]
-        const annotated = annotation?.annotatedKeys.has(pathKey(fieldPath)) ?? false
+        const annotated = wholeAnnotated(fieldPath, annotation)
         const nested = entryValue !== null && typeof entryValue === 'object'
         return (
-          <span key={key} className={`jv-pair${annotated ? ' jv-annotated' : ''}`}>
-            {annotation && <AnnotateControl annotated={annotated} onToggle={() => annotation.onToggle(fieldPath)} />}
+          <span key={key} className={`jv-pair${annotated ? ' jv-annotated' : ''}`} data-json-path={JSON.stringify(fieldPath)}>
             <span className="jv-pair-key">{key === '' ? '""' : key}</span>
             <span className="jv-pair-sep">{nested ? '—' : ':'}</span>
             {renderInlineValue(entryValue, fieldPath, annotation)}
@@ -148,25 +310,6 @@ function InlineObject({
         )
       })}
     </span>
-  )
-}
-
-/**
- * The per-entry annotate control: appears while the pointer is on the
- * entry's value — never on its key — and stays visible as a ✕ on an
- * already annotated entry.
- */
-function AnnotateControl({ annotated, onToggle }: { annotated: boolean; onToggle: () => void }): ReactNode {
-  return (
-    <button
-      type="button"
-      className={`annotate-control${annotated ? ' remove' : ''}`}
-      title={annotated ? 'Remove annotation' : 'Annotate this value'}
-      aria-label={annotated ? 'Remove annotation' : 'Annotate this value'}
-      onClick={onToggle}
-    >
-      {annotated ? '✕' : 'Annotate'}
-    </button>
   )
 }
 
@@ -201,13 +344,33 @@ function Group({
   )
 }
 
-function StringValue({ text }: { text: string }): ReactNode {
+/**
+ * A string value, with any annotated spans of it shown as highlighter
+ * marks. Long strings truncate until expanded; ranges are kept in
+ * full-text coordinates and clipped to what is currently visible.
+ */
+function StringValue({ text, path, ranges }: { text: string; path: JsonPath; ranges: AnnotationRange[] }): ReactNode {
   const [expanded, setExpanded] = useState(false)
   const isLong = text.length > LONG_STRING
   const shown = isLong && !expanded ? `${text.slice(0, LONG_STRING)}…` : text
+  const limit = isLong && !expanded ? LONG_STRING : text.length
+  const visible = ranges
+    .map((r) => ({ start: r.start, end: Math.min(r.end, limit) }))
+    .filter((r) => r.start < r.end)
+  const segments = splitSegments(shown, visible)
   return (
     <>
-      <span className="jv-string">{shown}</span>
+      <span className="jv-string" data-json-path={JSON.stringify(path)}>
+        {segments.map((segment, index) =>
+          segment.annotated ? (
+            <mark key={index} className="jv-mark">
+              {segment.text}
+            </mark>
+          ) : (
+            <span key={index}>{segment.text}</span>
+          )
+        )}
+      </span>
       {isLong && !expanded && (
         <button className="jv-more" onClick={() => setExpanded(true)}>
           Show all {text.length.toLocaleString()} characters

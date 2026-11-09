@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest'
 import type { Annotation } from '../../shared/types'
-import { annotatedKeys, annotationsForItem, decideAnnotationToggle, isAnnotated } from './annotations'
+import {
+  annotatedKeys,
+  annotationsForItem,
+  decideAnnotationToggle,
+  decideRangeToggle,
+  isAnnotated
+} from './annotations'
 
 function annotation(id: string, itemIndex: number | null, path: (string | number)[] | null): Annotation {
   return {
@@ -13,6 +19,10 @@ function annotation(id: string, itemIndex: number | null, path: (string | number
     message: 'problem',
     createdAt: '2026-09-13T00:00:00.000Z'
   }
+}
+
+function ranged(id: string, itemIndex: number | null, path: (string | number)[], start: number, end: number): Annotation {
+  return { ...annotation(id, itemIndex, path), range: { start, end } }
 }
 
 const stored = [
@@ -38,6 +48,13 @@ describe('annotations view logic', () => {
     expect(annotatedKeys(stored, null)).toEqual(new Set(['"note"']))
   })
 
+  it('counts only whole-value annotations as annotated keys', () => {
+    const mixed = [...stored, ranged('r', 4, ['msg'], 2, 6)]
+    // A ranged annotation does not mark the whole value.
+    expect(annotatedKeys(mixed, 4)).toEqual(new Set(['"error"', '"tags".#1']))
+    expect(isAnnotated(mixed, 4, ['msg'])).toBe(false)
+  })
+
   it('never confuses a numeric string key with an array index', () => {
     const tricky = [annotation('x', 0, ['2']), annotation('y', 0, [2])]
     expect(annotatedKeys(tricky, 0)).toEqual(new Set(['"2"', '#2']))
@@ -57,5 +74,17 @@ describe('annotations view logic', () => {
     const fileLevel = [...stored, annotation('e', null, null)]
     expect(decideAnnotationToggle(fileLevel, null, null)).toEqual({ kind: 'remove' })
     expect(decideAnnotationToggle(stored, null, null)).toEqual({ kind: 'add' })
+  })
+
+  it('decides the range toggle by exact span match', () => {
+    const one = [ranged('r', 4, ['msg'], 2, 6)]
+    expect(decideRangeToggle(one, 4, ['msg'], { start: 2, end: 6 })).toEqual({ kind: 'remove' })
+    expect(decideRangeToggle(one, 4, ['msg'], { start: 2, end: 5 })).toEqual({ kind: 'add' })
+    expect(decideRangeToggle(one, 4, ['msg'], { start: 3, end: 6 })).toEqual({ kind: 'add' })
+    expect(decideRangeToggle(one, 9, ['msg'], { start: 2, end: 6 })).toEqual({ kind: 'add' })
+    expect(decideRangeToggle(one, 4, ['other'], { start: 2, end: 6 })).toEqual({ kind: 'add' })
+    // A whole-value annotation on the same path does not match a range.
+    expect(decideRangeToggle([annotation('a', 4, ['msg'])], 4, ['msg'], { start: 2, end: 6 }))
+      .toEqual({ kind: 'add' })
   })
 })
