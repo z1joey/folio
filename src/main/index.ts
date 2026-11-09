@@ -60,6 +60,10 @@ async function clearFolderSearchCache(): Promise<void> {
 }
 
 function createWindow(): void {
+  // darwin-only chrome tuning: hiddenInset hides the native bar and the
+  // traffic-light position lines them up with the header tools row
+  // (52px header, 28px buttons → row center 26px; 12px lights → top 20px).
+  const darwin = process.platform === 'darwin'
   mainWindow = new BrowserWindow({
     width: 1000,
     height: 720,
@@ -67,7 +71,8 @@ function createWindow(): void {
     minHeight: 480,
     show: false,
     backgroundColor: nativeTheme.shouldUseDarkColors ? '#17181c' : '#f7f7f9',
-    titleBarStyle: process.platform === 'darwin' ? 'hiddenInset' : 'default',
+    titleBarStyle: darwin ? 'hiddenInset' : 'default',
+    ...(darwin ? { trafficLightPosition: { x: 16, y: 20 } } : {}),
     title: 'JSON Reader',
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),

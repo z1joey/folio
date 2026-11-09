@@ -104,6 +104,12 @@ describe('window setup', () => {
     expect(events).toContain('enter-full-screen')
     expect(events).toContain('leave-full-screen')
   })
+
+  it('positions the traffic lights on the header tools row', () => {
+    const call = browserWindowMock.mock.calls[0] as unknown[] | undefined
+    const options = call?.[0] as { trafficLightPosition?: unknown } | undefined
+    expect(options?.trafficLightPosition).toEqual({ x: 16, y: 20 })
+  })
 })
 
 describe('open folder', () => {
