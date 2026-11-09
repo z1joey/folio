@@ -88,8 +88,8 @@ const SAMPLE = {
   ]
 }
 
-function render(value: unknown, annotation?: AnnotationView): string {
-  return renderToStaticMarkup(createElement(JsonView, { value, annotation }))
+function render(value: unknown, annotation?: AnnotationView, defaultExpanded?: boolean): string {
+  return renderToStaticMarkup(createElement(JsonView, { value, annotation, defaultExpanded }))
 }
 
 describe('JsonView shape-adaptive rendering', () => {
@@ -158,6 +158,15 @@ describe('JsonView shape-adaptive rendering', () => {
     expect(markup).toContain('aria-expanded="false">Items (3)')
     expect(markup).not.toContain('jv-list')
     expect(markup).not.toContain('>partOfSpeech<')
+  })
+
+  it('expands every child group in expanded mode', () => {
+    const markup = render(SAMPLE, undefined, true)
+    expect(markup.match(/aria-expanded="false"/g)?.length ?? 0).toBe(0)
+    // The folded content is actually present now.
+    expect(markup).toContain('jv-list')
+    expect(markup).toContain('>partOfSpeech<')
+    expect(markup).toContain('say hello to')
   })
 
   it('highlights a whole-value annotation through the unchanged path keys', () => {

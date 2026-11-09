@@ -51,7 +51,16 @@ function wholeAnnotated(path: JsonPath, annotation?: AnnotationView): boolean {
  * exact span; annotated spans show as highlighter marks. Values carry
  * their path in `data-json-path` so the menu can find it.
  */
-export function JsonView({ value, annotation }: { value: unknown; annotation?: AnnotationView }): ReactNode {
+export function JsonView({
+  value,
+  annotation,
+  defaultExpanded = false
+}: {
+  value: unknown
+  annotation?: AnnotationView
+  /** When true, every child group starts unfolded instead of folded. */
+  defaultExpanded?: boolean
+}): ReactNode {
   const [menu, setMenu] = useState<MenuState | null>(null)
 
   useEffect(() => {
@@ -99,7 +108,7 @@ export function JsonView({ value, annotation }: { value: unknown; annotation?: A
 
   return (
     <div className="jv" onContextMenu={handleContextMenu}>
-      {renderNode(value, [], annotation)}
+      {renderNode(value, [], annotation, defaultExpanded)}
       {menu && <ValueMenu menu={menu} onClose={() => setMenu(null)} onToggle={annotation?.onToggle} />}
     </div>
   )
@@ -195,7 +204,7 @@ function selectionRangeInElement(el: Element, domRange: Range): AnnotationRange 
   return { start: Math.min(start, end), end: Math.max(start, end) }
 }
 
-function renderNode(value: unknown, path: JsonPath, annotation?: AnnotationView): ReactNode {
+function renderNode(value: unknown, path: JsonPath, annotation?: AnnotationView, defaultExpanded = false): ReactNode {
   if (value === null) return <span className="jv-null" data-json-path={JSON.stringify(path)}>null</span>
   if (typeof value === 'string') return <StringValue text={value} path={path} ranges={rangesFor(path, annotation)} />
   if (typeof value === 'number') return <span className="jv-number" data-json-path={JSON.stringify(path)}>{String(value)}</span>
@@ -205,14 +214,14 @@ function renderNode(value: unknown, path: JsonPath, annotation?: AnnotationView)
     if (value.length === 0) return <Empty text="Empty array" />
     if (isCompact(value)) return <InlineArray value={value} path={path} annotation={annotation} />
     return (
-      <Group kind="array" count={value.length} defaultOpen={path.length === 0}>
+      <Group kind="array" count={value.length} defaultOpen={defaultExpanded || path.length === 0}>
         <ul className="jv-list">
           {value.map((item, index) => {
             const itemPath: JsonPath = [...path, index]
             const annotated = wholeAnnotated(itemPath, annotation)
             return (
               <li key={index} className={annotated ? 'jv-annotated' : undefined} data-json-path={JSON.stringify(itemPath)}>
-                {renderNode(item, itemPath, annotation)}
+                {renderNode(item, itemPath, annotation, defaultExpanded)}
               </li>
             )
           })}
@@ -225,7 +234,7 @@ function renderNode(value: unknown, path: JsonPath, annotation?: AnnotationView)
   if (entries.length === 0) return <Empty text="Empty object" />
   if (isCompact(value)) return <InlineObject entries={entries} path={path} annotation={annotation} />
   return (
-    <Group kind="object" count={entries.length} defaultOpen={path.length === 0}>
+    <Group kind="object" count={entries.length} defaultOpen={defaultExpanded || path.length === 0}>
       <div className="jv-fields">
         {entries.map(([key, entryValue]) => {
           const fieldPath: JsonPath = [...path, key]
@@ -234,7 +243,7 @@ function renderNode(value: unknown, path: JsonPath, annotation?: AnnotationView)
             <div className={`jv-field${annotated ? ' jv-annotated' : ''}`} key={key}>
               <div className="jv-key">{key === '' ? '""' : key}</div>
               <div className="jv-value" data-json-path={JSON.stringify(fieldPath)}>
-                {renderNode(entryValue, fieldPath, annotation)}
+                {renderNode(entryValue, fieldPath, annotation, defaultExpanded)}
               </div>
             </div>
           )

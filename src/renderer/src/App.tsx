@@ -45,6 +45,25 @@ function PanelLeftIcon(): React.ReactElement {
   )
 }
 
+/** Chevrons spreading apart when expanded, closing in when collapsed. */
+function ExpandAllIcon({ up }: { up: boolean }): React.ReactElement {
+  return (
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      {up ? (
+        <>
+          <path d="M7 4l5 5 5-5" />
+          <path d="M7 20l5-5 5 5" />
+        </>
+      ) : (
+        <>
+          <path d="M7 9l5-5 5 5" />
+          <path d="M7 15l5 5 5-5" />
+        </>
+      )}
+    </svg>
+  )
+}
+
 function MaximizeIcon(): React.ReactElement {
   return (
     <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
@@ -76,6 +95,9 @@ export default function App(): React.ReactElement {
   // reclaim the space they reserve in the windowed layout.
   const [osFullscreen, setOsFullscreen] = useState(false)
   useEffect(() => jsonReader.onFullscreenChanged(setOsFullscreen), [])
+  // Global fold mode: collapsed shows the document as an outline (root
+  // open, children folded); expanded unfolds every child group too.
+  const [expandAll, setExpandAll] = useState(false)
   const [version, setVersion] = useState('')
   useEffect(() => {
     void jsonReader.getVersion().then(setVersion)
@@ -417,15 +439,27 @@ export default function App(): React.ReactElement {
                 </button>
               )}
               {fileName && (
-                <button
-                  type="button"
-                  className="icon-button"
-                  aria-label="Fullscreen reading"
-                  title="Fullscreen reading — no sidebar, no pager; Esc exits"
-                  onClick={enterZen}
-                >
-                  <MaximizeIcon />
-                </button>
+                <>
+                  <button
+                    type="button"
+                    className="icon-button"
+                    aria-pressed={expandAll}
+                    aria-label={expandAll ? 'Collapse all sections' : 'Expand all sections'}
+                    title={expandAll ? 'Collapse all sections' : 'Expand all sections'}
+                    onClick={() => setExpandAll((open) => !open)}
+                  >
+                    <ExpandAllIcon up={expandAll} />
+                  </button>
+                  <button
+                    type="button"
+                    className="icon-button"
+                    aria-label="Fullscreen reading"
+                    title="Fullscreen reading — no sidebar, no pager; Esc exits"
+                    onClick={enterZen}
+                  >
+                    <MaximizeIcon />
+                  </button>
+                </>
               )}
             </div>
           )}
@@ -484,8 +518,9 @@ export default function App(): React.ReactElement {
                   fold/expand state never leaks from a same-named file in
                   another folder (or a single-file pick). */}
               <JsonView
-                key={`${folder?.name ?? 'file'}:${state.fileName}`}
+                key={`${folder?.name ?? 'file'}:${state.fileName}:${expandAll ? 'open' : 'folded'}`}
                 value={state.value}
+                defaultExpanded={expandAll}
                 annotation={{
                   annotations: annotationsForItem(annotations, null),
                   onToggle: (path, range) => void toggleAnnotation(fileIndex, null, path, '', range)
@@ -502,8 +537,9 @@ export default function App(): React.ReactElement {
               <div className="doc">
                 {/* Keyed per origin+file+item for the same reason as the value view. */}
                 <ItemBody
-                  key={`${folder?.name ?? 'file'}:${state.fileName}:${state.index}`}
+                  key={`${folder?.name ?? 'file'}:${state.fileName}:${state.index}:${expandAll ? 'open' : 'folded'}`}
                   item={state.item}
+                  defaultExpanded={expandAll}
                   annotationView={{
                     annotations: annotationsForItem(annotations, state.index),
                     onToggle: (path, range) => void toggleAnnotation(fileIndex, state.index, path, '', range)
@@ -535,10 +571,12 @@ export default function App(): React.ReactElement {
 
 function ItemBody({
   item,
+  defaultExpanded,
   annotationView,
   errorAnnotate
 }: {
   item: ItemState
+  defaultExpanded: boolean
   annotationView: AnnotationView
   errorAnnotate: ErrorAnnotate
 }): React.ReactElement {
@@ -553,7 +591,7 @@ function ItemBody({
   if ('error' in item) {
     return <ErrorState message={item.error} onOpenFolder={null} annotate={errorAnnotate} />
   }
-  return <JsonView value={item.value} annotation={annotationView} />
+  return <JsonView value={item.value} defaultExpanded={defaultExpanded} annotation={annotationView} />
 }
 
 function EmptyState({
