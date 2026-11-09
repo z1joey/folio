@@ -108,7 +108,12 @@ describe('window setup', () => {
   it('positions the traffic lights on the header tools row', () => {
     const call = browserWindowMock.mock.calls[0] as unknown[] | undefined
     const options = call?.[0] as { trafficLightPosition?: unknown } | undefined
-    expect(options?.trafficLightPosition).toEqual({ x: 16, y: 20 })
+    // The position is darwin-only chrome tuning; elsewhere it stays unset.
+    if (process.platform === 'darwin') {
+      expect(options?.trafficLightPosition).toEqual({ x: 16, y: 20 })
+    } else {
+      expect(options?.trafficLightPosition).toBeUndefined()
+    }
   })
 })
 
