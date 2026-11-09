@@ -518,7 +518,7 @@ kbd {
     animation: none;
   }
 
-  .jv-summary::before {
+  .jv-summary::after {
     transition: none;
   }
 }
@@ -529,13 +529,13 @@ kbd {
 .jv-fields {
   display: flex;
   flex-direction: column;
-  gap: 18px;
+  gap: 10px;
 }
 
 .jv-field {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 2px;
 }
 
 /* The small caps label above its value. */
@@ -585,34 +585,30 @@ kbd {
   border: 1px solid var(--hairline);
   border-radius: 8px;
   background: var(--panel);
-  padding: 16px 18px;
-  margin-top: 4px;
+  padding: 10px 12px;
+  margin-top: 2px;
 }
 
-/* A group inside a group drops the box and nearly all padding for a
-   color-coded left rule: the hue tracks the nesting level, so depth stays
-   readable once spacing can no longer afford to grow. */
+/* A group inside a group drops the border and sits on a faint tint that
+   drifts toward the page background with depth, so nesting stays readable
+   once spacing can no longer afford to grow. */
 .jv-group .jv-group {
   border: none;
-  border-left: 2px solid color-mix(in srgb, var(--accent) 55%, var(--hairline));
-  border-radius: 0;
-  background: none;
-  padding: 2px 0 2px 8px;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--bg) 55%, var(--panel));
+  padding: 6px 8px;
 }
 
 .jv-group .jv-group .jv-group {
-  border-left-color: color-mix(in srgb, var(--num) 55%, var(--hairline));
+  background: color-mix(in srgb, var(--bg) 80%, var(--panel));
 }
 
 .jv-group .jv-group .jv-group .jv-group {
-  border-left-color: color-mix(in srgb, var(--bool) 55%, var(--hairline));
+  background: var(--bg);
 }
 
-.jv-group .jv-group .jv-group .jv-group .jv-group {
-  border-left-color: color-mix(in srgb, var(--key) 55%, var(--hairline));
-}
-
-/* The fold header of a group: disclosure arrow plus a count summary. */
+/* The fold header of a group: a count summary, then the disclosure arrow
+   trailing it. */
 .jv-summary {
   display: inline-flex;
   align-items: center;
@@ -625,24 +621,25 @@ kbd {
   background: none;
   border: none;
   padding: 2px 4px;
-  margin: 0 0 8px -4px;
+  margin: 0 0 4px -4px;
   cursor: pointer;
   user-select: none;
 }
 
-.jv-summary::before {
+.jv-summary::after {
   content: '';
   width: 0;
   height: 0;
   border-left: 4px solid transparent;
   border-right: 4px solid transparent;
   border-top: 5px solid currentColor;
-  margin-right: 6px;
-  transform: rotate(90deg);
+  margin-left: 6px;
+  /* The triangle points down by construction; folded = turned to ▸. */
+  transform: rotate(-90deg);
   transition: transform 0.15s ease;
 }
 
-.jv-summary[aria-expanded='true']::before {
+.jv-summary[aria-expanded='true']::after {
   transform: rotate(0deg);
 }
 
@@ -655,29 +652,38 @@ kbd {
   outline-offset: 2px;
 }
 
-/* Arrays read as numbered lists. */
+/* Arrays read as numbered lists: the number sits on the same line as the
+   item's first line, so it aligns with a fold header's title instead of
+   floating above it. */
 .jv-list {
   list-style: none;
   counter-reset: jv-item;
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 6px;
 }
 
 .jv-list > li {
   position: relative;
-  padding-left: 18px;
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
 }
 
 .jv-list > li::before {
   counter-increment: jv-item;
   content: counter(jv-item) '.';
-  position: absolute;
-  left: 0;
-  top: 1px;
+  flex: none;
+  min-width: 20px;
+  text-align: right;
   font-family: var(--mono);
   font-size: 11px;
   color: var(--faint);
+}
+
+.jv-list > li > *:not(.annotate-control) {
+  flex: 1;
+  min-width: 0;
 }
 
 .jv-list > li > .jv-group {
@@ -688,6 +694,63 @@ kbd {
   color: var(--faint);
   font-style: italic;
   font-size: 13.5px;
+}
+
+/* ── Compact inline runs ────────────────────────────────────────────── */
+
+/* Leaf-shaped containers read as one flowing line instead of a panel:
+   array items become pills, scalar records become `key: value` pairs. */
+.jv-inline {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 10px;
+  line-height: 1.5;
+}
+
+/* A run nested in a pair sits tighter: its items belong to that pair. */
+.jv-pair .jv-inline {
+  gap: 0 6px;
+}
+
+/* A pair whose value is itself a container keeps its natural one-line
+   width: the run wraps between pairs, never inside them — an internally
+   wrapped pill doubles its height and reads as a blank band above the
+   next row. In a very narrow column the pair caps at the line and its
+   contents wrap as the fallback. Long scalar values still wrap normally. */
+.jv-pair:has(> .jv-inline) {
+  flex-shrink: 0;
+  max-width: 100%;
+}
+
+.jv-pair > .jv-inline {
+  min-width: 0;
+}
+
+.jv-pill {
+  position: relative;
+  display: inline-flex;
+  align-items: baseline;
+  background: color-mix(in srgb, var(--hairline) 40%, transparent);
+  border-radius: 5px;
+  padding: 0 6px;
+}
+
+.jv-pair {
+  position: relative;
+  display: inline-flex;
+  align-items: baseline;
+  gap: 5px;
+}
+
+.jv-pair-key {
+  font-size: 12.5px;
+  color: var(--key);
+  overflow-wrap: break-word;
+}
+
+.jv-pair-sep {
+  color: var(--faint);
 }
 
 .jv-more {
@@ -727,6 +790,19 @@ kbd {
   padding-right: 8px;
 }
 
+/* Annotated pills and pairs wear the same highlighter; the pair's padding
+   keeps the ring off the glyphs. */
+.jv-pill.jv-annotated,
+.jv-pair.jv-annotated {
+  background: var(--highlight);
+  box-shadow: 0 0 0 1px var(--highlight-edge);
+}
+
+.jv-pair.jv-annotated {
+  padding: 1px 4px;
+  margin: -1px -4px;
+}
+
 /* The per-entry control: invisible until the pointer is on the entry's
    value; annotated entries keep their ✕ always available. */
 .annotate-control {
@@ -755,12 +831,33 @@ kbd {
   right: 0;
 }
 
+/* On the inline run the control floats just above the pill or pair it
+   belongs to, clear of the flowing line. */
+.jv-pill > .annotate-control,
+.jv-pair > .annotate-control {
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + 2px);
+}
+
+/* An already annotated pill keeps its ✕ inside, where it can neither
+   cover the line above nor a neighbouring pill. */
+.jv-pill.jv-annotated > .annotate-control,
+.jv-pair.jv-annotated > .annotate-control {
+  position: static;
+  align-self: center;
+  margin-left: 2px;
+}
+
 /* The control shows only while the pointer is on the innermost hovered
    entry's value: `:hover` also matches every enclosing entry, so the
    `:has` guard keeps an outer entry's button hidden whenever a nested
-   entry is the one being pointed at. Keys never reveal a control. */
-.jv-value:hover:not(:has(.jv-field:hover, .jv-list > li:hover)) > .annotate-control,
-.jv-list > li:hover:not(:has(.jv-field:hover, .jv-list > li:hover)) > .annotate-control,
+   entry — structured or inline — is the one being pointed at. Keys never
+   reveal a control. */
+.jv-value:hover:not(:has(.jv-field:hover, .jv-list > li:hover, .jv-pill:hover, .jv-pair:hover)) > .annotate-control,
+.jv-list > li:hover:not(:has(.jv-field:hover, .jv-list > li:hover, .jv-pill:hover, .jv-pair:hover)) > .annotate-control,
+.jv-pill:hover:not(:has(.jv-field:hover, .jv-list > li:hover, .jv-pill:hover, .jv-pair:hover)) > .annotate-control,
+.jv-pair:hover:not(:has(.jv-field:hover, .jv-list > li:hover, .jv-pill:hover, .jv-pair:hover)) > .annotate-control,
 .annotate-control:focus-visible,
 .annotate-control.remove {
   opacity: 1;
