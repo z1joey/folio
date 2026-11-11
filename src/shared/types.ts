@@ -156,6 +156,14 @@ export type RecentFolder = {
   lastOpenedAt: string
 }
 
+/**
+ * The background update check's progress: `idle` while nothing newer
+ * exists (or the check failed), `downloading` while the newer release is
+ * being fetched, `ready` once its dmg sits on disk — the point where the
+ * header swaps the version number for an Update button.
+ */
+export type UpdateState = { kind: 'idle' } | { kind: 'downloading'; version: string } | { kind: 'ready'; version: string }
+
 export interface JsonReaderApi {
   /** Shows the open-folder dialog and loads the folder's JSON files. */
   openFolder: () => Promise<OpenResponse>
@@ -183,6 +191,12 @@ export interface JsonReaderApi {
   onOpenFolderRequested: (callback: () => void) => () => void
   /** Fired when the window enters or leaves native (system) fullscreen. */
   onFullscreenChanged: (callback: (isFullscreen: boolean) => void) => () => void
+  /** The background update check's current state. */
+  getUpdateState: () => Promise<UpdateState>
+  /** Opens the downloaded installer dmg; resolves once handed to the OS. */
+  installUpdate: () => Promise<void>
+  /** Fired on every background update-state transition. */
+  onUpdateStateChanged: (callback: (state: UpdateState) => void) => () => void
   /** The app version declared in package.json (e.g. "0.1.0"). */
   getVersion: () => Promise<string>
 }

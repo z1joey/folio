@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import type { Annotation, AnnotationRange, JsonPath, OpenResponse, RecentFolder, RootInfo, SearchHit } from '../../shared/types'
+import type { Annotation, AnnotationRange, JsonPath, OpenResponse, RecentFolder, RootInfo, SearchHit, UpdateState } from '../../shared/types'
 import { jsonReader } from './ipc'
 import { annotationsForItem, decideAnnotationToggle, decideRangeToggle, isAnnotated } from './annotations'
 import type { AnnotationView } from './JsonView'
@@ -101,6 +101,14 @@ export default function App(): React.ReactElement {
   const [version, setVersion] = useState('')
   useEffect(() => {
     void jsonReader.getVersion().then(setVersion)
+  }, [])
+  // The background update check: once a newer release sits downloaded on
+  // disk, the header swaps the version number for an Update button — one
+  // slot, one element at a time.
+  const [updateState, setUpdateState] = useState<UpdateState>({ kind: 'idle' })
+  useEffect(() => {
+    void jsonReader.getUpdateState().then(setUpdateState).catch(() => {})
+    return jsonReader.onUpdateStateChanged(setUpdateState)
   }, [])
   const stateRef = useRef(state)
   stateRef.current = state
@@ -470,7 +478,18 @@ export default function App(): React.ReactElement {
               onSelect={handleSearchSelect}
             />
           )}
-          {version && <span className="app-version">v{version}</span>}
+          {updateState.kind === 'ready' ? (
+      <button
+        type="button"
+        className="update-button"
+        title={`Install v${updateState.version} — downloaded and ready, opens the installer`}
+        onClick={() => void jsonReader.installUpdate()}
+      >
+        Update {updateState.version}
+      </button>
+    ) : (
+      version && <span className="app-version">v{version}</span>
+    )}
         </header>
       )}
 
