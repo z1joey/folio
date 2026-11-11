@@ -202,6 +202,16 @@ describe('JsonView shape-adaptive rendering', () => {
     // The range sits past the truncation point, so nothing is marked yet.
     expect(markup).not.toContain('jv-mark')
   })
+
+  it('offers a preview toggle only for markdown-looking strings', () => {
+    const markup = render({ notes: '# Plan\n\n- first\n- second', greeting: 'hello world' })
+    // The markdown-looking value carries the toggle; the plain one does not.
+    expect(markup).toContain('jv-md-toggle')
+    expect(markup.match(/jv-md-toggle/g)?.length).toBe(1)
+    // Source mode is the default: the raw text renders, not the preview.
+    expect(markup).toContain('# Plan')
+    expect(markup).not.toContain('md-preview')
+  })
 })
 
 function baseAnnotation(id: string): Annotation {

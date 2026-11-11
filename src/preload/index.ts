@@ -21,7 +21,8 @@ const api: JsonReaderApi = {
     ipcRenderer.on('fullscreen-changed', listener)
     return () => ipcRenderer.removeListener('fullscreen-changed', listener)
   },
-  getVersion: () => ipcRenderer.invoke('json:get-version')
+  getVersion: () => ipcRenderer.invoke('json:get-version'),
+  openExternal: (url: string) => ipcRenderer.invoke('json:open-external', url)
 }
 
 contextBridge.exposeInMainWorld('jsonReader', api)

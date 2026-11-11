@@ -1,6 +1,8 @@
 import { useEffect, useState, type MouseEvent, type ReactNode } from 'react'
 import { isCompact } from './compact'
 import { decideContextMenu, type ContextMenuDecision } from './contextMenu'
+import { MarkdownBlock } from './MarkdownBlock'
+import { looksLikeMarkdown } from './markdown'
 import { splitSegments, textOffsetBefore } from './markText'
 import type { Annotation, AnnotationRange, JsonPath } from '../../shared/types'
 import { pathKey } from '../../shared/annotationPath'
@@ -366,10 +368,14 @@ function Group({
 /**
  * A string value, with any annotated spans of it shown as highlighter
  * marks. Long strings truncate until expanded; ranges are kept in
- * full-text coordinates and clipped to what is currently visible.
+ * full-text coordinates and clipped to what is currently visible. Text
+ * that reads as markdown carries a small Source ⇄ Preview toggle — the
+ * preview replaces the raw run with rendered markdown until toggled back.
  */
 function StringValue({ text, path, ranges }: { text: string; path: JsonPath; ranges: AnnotationRange[] }): ReactNode {
   const [expanded, setExpanded] = useState(false)
+  const [preview, setPreview] = useState(false)
+  const markdown = looksLikeMarkdown(text)
   const isLong = text.length > LONG_STRING
   const shown = isLong && !expanded ? `${text.slice(0, LONG_STRING)}…` : text
   const limit = isLong && !expanded ? LONG_STRING : text.length
@@ -379,18 +385,34 @@ function StringValue({ text, path, ranges }: { text: string; path: JsonPath; ran
   const segments = splitSegments(shown, visible)
   return (
     <>
-      <span className="jv-string" data-json-path={JSON.stringify(path)}>
-        {segments.map((segment, index) =>
-          segment.annotated ? (
-            <mark key={index} className="jv-mark">
-              {segment.text}
-            </mark>
-          ) : (
-            <span key={index}>{segment.text}</span>
-          )
-        )}
-      </span>
-      {isLong && !expanded && (
+      {preview ? (
+        <span className="md-value-preview" data-json-path={JSON.stringify(path)}>
+          <MarkdownBlock text={text} wrapped />
+        </span>
+      ) : (
+        <span className="jv-string" data-json-path={JSON.stringify(path)}>
+          {segments.map((segment, index) =>
+            segment.annotated ? (
+              <mark key={index} className="jv-mark">
+                {segment.text}
+              </mark>
+            ) : (
+              <span key={index}>{segment.text}</span>
+            )
+          )}
+        </span>
+      )}
+      {markdown && (
+        <button
+          type="button"
+          className={`jv-md-toggle${preview ? ' on' : ''}`}
+          aria-pressed={preview}
+          onClick={() => setPreview((on) => !on)}
+        >
+          {preview ? 'Source' : 'Preview'}
+        </button>
+      )}
+      {isLong && !expanded && !preview && (
         <button className="jv-more" onClick={() => setExpanded(true)}>
           Show all {text.length.toLocaleString()} characters
         </button>

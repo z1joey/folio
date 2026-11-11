@@ -1,5 +1,6 @@
-import { app, BrowserWindow, dialog, ipcMain, Menu, nativeTheme } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, Menu, nativeTheme, shell } from 'electron'
 import { readdir, readFile, stat, writeFile } from 'node:fs/promises'
+import { lookup } from 'node:dns/promises'
 import { basename, join } from 'node:path'
 import { JsonFile, JsonError, searchText } from './jsonFile'
 import { parseRecentFolders, withRecentFolder, type RecentFolder } from './recentFolders'
@@ -42,6 +43,35 @@ let currentFolderFiles: string[] | null = null
 let searchSeq = 0
 
 const FOLDER_SEARCH_LIMIT = 10
+
+/** Markdown previews read whole files; anything past this is refused. */
+const MAX_MARKDOWN_BYTES = 5 * 1024 * 1024
+
+/**
+ * True for loopback, private, link-local and other reserved addresses —
+ * the DNS answer a public hostname must never produce before the shell
+ * opens a link. (v4: 127/8, 10/8, 172.16/12, 192.168/16, 169.254/16,
+ * 0/8, 100.64/10; v6: ::1, ::, fc00::/7, fe80::/10, ff00::/8.)
+ */
+function isPrivateAddress(ip: string): boolean {
+  const v4 = ip.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/)
+  if (v4) {
+    const [a, b, c, d] = [Number(v4[1]), Number(v4[2]), Number(v4[3]), Number(v4[4])]
+    if ([a, b, c, d].some((n) => n > 255)) return false
+    if (a === 127 || a === 10 || a === 0) return true
+    if (a === 172 && b >= 16 && b <= 31) return true
+    if (a === 192 && b === 168) return true
+    if (a === 169 && b === 254) return true
+    if (a === 100 && b >= 64 && b <= 127) return true
+    return false
+  }
+  const v6 = ip.toLowerCase()
+  if (v6 === '::1' || v6 === '::') return true
+  if (/^f[cd][0-9a-f]{2}:/.test(v6)) return true
+  if (/^fe[89ab][0-9a-f]:/.test(v6)) return true
+  if (/^ff[0-9a-f]{2}:/.test(v6)) return true
+  return false
+}
 
 type FolderSearchEntry = { file: JsonFile | null; text: string | null }
 
@@ -143,11 +173,30 @@ async function closeCurrentFile(): Promise<void> {
   }
 }
 
+/**
+ * Reads a markdown file as plain text. Markdown files are small by
+ * nature; a cap keeps a stray huge file from freezing the renderer.
+ */
+async function readMarkdownFile(path: string): Promise<string> {
+  const info = await stat(path)
+  if (info.size > MAX_MARKDOWN_BYTES) {
+    throw new JsonError('This markdown file is too large to preview.')
+  }
+  return readFile(path, 'utf8')
+}
+
 /** Opens `path` as the current file, replacing whatever was open before. */
 async function openJsonFile(path: string): Promise<OpenFileResponse> {
   const fileName = basename(path)
   currentFilePath = path
   try {
+    // Markdown files read as plain text — no JSON scan, no annotations.
+    if (/\.md$/i.test(fileName)) {
+      const text = await readMarkdownFile(path)
+      currentFile = null
+      currentFileName = fileName
+      return { status: 'ok', fileName, root: { type: 'markdown', text } }
+    }
     await closeCurrentFile()
     const file = await JsonFile.open(path)
     currentFile = file
@@ -185,7 +234,7 @@ async function openFolderPath(path: string): Promise<OpenResponse> {
   try {
     const entries = await readdir(path, { withFileTypes: true })
     names = entries
-      .filter((entry) => entry.isFile() && !entry.name.startsWith('.') && /\.json$/i.test(entry.name))
+      .filter((entry) => entry.isFile() && !entry.name.startsWith('.') && /\.(json|md)$/i.test(entry.name))
       .map((entry) => entry.name)
       .sort(compareFileWithSidecars)
   } catch {
@@ -202,7 +251,7 @@ async function openFolderPath(path: string): Promise<OpenResponse> {
     return {
       status: 'error',
       fileName: basename(path),
-      error: 'No JSON files found in this folder. Please choose another folder.'
+      error: 'No JSON or Markdown files found in this folder. Please choose another folder.'
     }
   }
   // A successful open puts the folder at the front of the recents.
@@ -412,6 +461,25 @@ ipcMain.handle('json:search', (_event, query: unknown): Promise<SearchResponse> 
 })
 
 ipcMain.handle('json:get-version', (): string => app.getVersion())
+
+/**
+ * Opens a markdown link in the system browser. The url must be https and
+ * public — localhost, private ranges and other schemes never reach the
+ * shell; a refused link just does nothing.
+ */
+ipcMain.handle('json:open-external', async (_event, url: unknown): Promise<void> => {
+  if (typeof url !== 'string') return
+  try {
+    const parsed = new URL(url)
+    if (parsed.protocol !== 'https:') return
+    if (parsed.username || parsed.password) return
+    const addresses = await lookup(parsed.hostname, { all: true }).catch(() => [])
+    if (addresses.length > 0 && addresses.every((entry) => isPrivateAddress(entry.address))) return
+    await shell.openExternal(parsed.toString())
+  } catch {
+    // A malformed url is not an error worth surfacing.
+  }
+})
 
 /** Resolves the annotation target: a folder file by index, or the open single file. */
 function annotationTargetPath(fileIndex: number | null): string | null {

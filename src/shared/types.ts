@@ -4,7 +4,12 @@ import type { JsonPath } from './annotationPath'
 
 export type { JsonPath } from './annotationPath'
 
-export type RootInfo = { type: 'array'; count: number } | { type: 'value'; value: unknown }
+/**
+ * The root shape of an opened file: a JSON array (read item by item), any
+ * other JSON value, or a markdown file's full text (rendered, not JSON at
+ * all).
+ */
+export type RootInfo = { type: 'array'; count: number } | { type: 'value'; value: unknown } | { type: 'markdown'; text: string }
 
 export type OpenResponse =
   | { status: 'canceled' }
@@ -183,6 +188,8 @@ export interface JsonReaderApi {
   onOpenFolderRequested: (callback: () => void) => () => void
   /** Fired when the window enters or leaves native (system) fullscreen. */
   onFullscreenChanged: (callback: (isFullscreen: boolean) => void) => () => void
+  /** Opens an https link in the system browser; refused urls do nothing. */
+  openExternal: (url: string) => Promise<void>
   /** The app version declared in package.json (e.g. "0.1.0"). */
   getVersion: () => Promise<string>
 }

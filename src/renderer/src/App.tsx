@@ -3,6 +3,7 @@ import type { Annotation, AnnotationRange, JsonPath, OpenResponse, RecentFolder,
 import { jsonReader } from './ipc'
 import { annotationsForItem, decideAnnotationToggle, decideRangeToggle, isAnnotated } from './annotations'
 import type { AnnotationView } from './JsonView'
+import { MarkdownBlock } from './MarkdownBlock'
 import FilePanel from './FilePanel'
 import ItemPosition from './ItemPosition'
 import { JsonView } from './JsonView'
@@ -15,6 +16,7 @@ type State =
   | { view: 'loading' }
   | { view: 'array'; fileName: string; count: number; index: number; item: ItemState }
   | { view: 'value'; fileName: string; value: unknown }
+  | { view: 'markdown'; fileName: string; text: string }
   | {
       view: 'error'
       fileName: string
@@ -159,6 +161,8 @@ export default function App(): React.ReactElement {
           index: 0,
           item: { loading: true }
         })
+      } else if (root.type === 'markdown') {
+        setState({ view: 'markdown', fileName, text: root.text })
       } else {
         setState({ view: 'value', fileName, value: root.value })
       }
@@ -528,6 +532,12 @@ export default function App(): React.ReactElement {
               />
             </div>
           )}
+          {state.view === 'markdown' && (
+            <div className="doc">
+              {/* Keyed like the value view: a fresh toggle state per file. */}
+              <MarkdownView key={`${folder?.name ?? 'file'}:${state.fileName}`} text={state.text} />
+            </div>
+          )}
           {state.view === 'array' &&
             (state.count === 0 ? (
               <div className="center-state">
@@ -592,6 +602,29 @@ function ItemBody({
     return <ErrorState message={item.error} onOpenFolder={null} annotate={errorAnnotate} />
   }
   return <JsonView value={item.value} defaultExpanded={defaultExpanded} annotation={annotationView} />
+}
+
+/**
+ * A markdown file opened from the sidebar: rendered preview by default,
+ * one keystroke away from the raw source. No annotations, no pager — it
+ * is not JSON.
+ */
+function MarkdownView({ text }: { text: string }): React.ReactElement {
+  const [preview, setPreview] = useState(true)
+  return (
+    <>
+      <div className="md-toolbar">
+        <button type="button" className={`jv-md-toggle${preview ? ' on' : ''}`} aria-pressed={preview} onClick={() => setPreview((on) => !on)}>
+          {preview ? 'Source' : 'Preview'}
+        </button>
+      </div>
+      {preview ? (
+        <MarkdownBlock text={text} wrapped />
+      ) : (
+        <pre className="md-source">{text}</pre>
+      )}
+    </>
+  )
 }
 
 function EmptyState({
