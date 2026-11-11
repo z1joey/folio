@@ -495,16 +495,20 @@ export default function App(): React.ReactElement {
               )}
               {fileName && (
                 <>
-                  <button
-                    type="button"
-                    className="icon-button"
-                    aria-pressed={expandAll}
-                    aria-label={expandAll ? 'Collapse all sections' : 'Expand all sections'}
-                    title={expandAll ? 'Collapse all sections' : 'Expand all sections'}
-                    onClick={() => setExpandAll((open) => !open)}
-                  >
-                    <ExpandAllIcon up={expandAll} />
-                  </button>
+                  {/* Expand/collapse shapes a JSON tree; markdown has no
+                      tree to fold, so its header only keeps fullscreen. */}
+                  {state.view !== 'markdown' && (
+                    <button
+                      type="button"
+                      className="icon-button"
+                      aria-pressed={expandAll}
+                      aria-label={expandAll ? 'Collapse all sections' : 'Expand all sections'}
+                      title={expandAll ? 'Collapse all sections' : 'Expand all sections'}
+                      onClick={() => setExpandAll((open) => !open)}
+                    >
+                      <ExpandAllIcon up={expandAll} />
+                    </button>
+                  )}
                   <button
                     type="button"
                     className="icon-button"
