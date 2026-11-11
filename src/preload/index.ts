@@ -26,6 +26,7 @@ const api: JsonReaderApi = {
     ipcRenderer.on('file-opened', listener)
     return () => ipcRenderer.removeListener('file-opened', listener)
   },
+  consumeFileOpened: () => ipcRenderer.invoke('json:consume-file-opened'),
   getUpdateState: () => ipcRenderer.invoke('json:get-update-state'),
   installUpdate: () => ipcRenderer.invoke('json:install-update'),
   onUpdateStateChanged: (callback: (state: UpdateState) => void) => {

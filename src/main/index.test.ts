@@ -142,6 +142,30 @@ describe('window setup', () => {
       })
     })
   })
+
+  it('keeps the last file-open result consumable for a renderer that mounts late', async () => {
+    const folder = await folderFixture('open-file-race', { 'later.md': '# Race winner' })
+    const registered = appMock.on.mock.calls.filter(([evt]) => evt === 'open-file')
+    const entry = registered[registered.length - 1] as [string, (event: { preventDefault(): void }, path: string) => void]
+    const event = { preventDefault: vi.fn() }
+    entry[1](event, join(folder, 'later.md'))
+    // The live send races the renderer's mount; the consume call is the
+    // deterministic path a freshly mounted renderer takes instead. The
+    // open itself is async, so wait for the result to land.
+    const consume = handlers.get('json:consume-file-opened') as () => Promise<OpenFileResponse | null>
+    let first: OpenFileResponse | null = null
+    await vi.waitFor(async () => {
+      first = (await consume()) as OpenFileResponse
+      expect(first).toMatchObject({
+        status: 'ok',
+        fileName: 'later.md',
+        root: { type: 'markdown', text: '# Race winner' }
+      })
+    })
+    // Consumed once: it does not re-open on the next mount.
+    const second = await consume()
+    expect(second).toBeNull()
+  })
 })
 
 describe('open folder', () => {
