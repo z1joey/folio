@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import type { Annotation, AnnotationRange, JsonPath, OpenResponse, RecentFolder, RootInfo, SearchHit, UpdateState } from '../../shared/types'
+import type { Annotation, AnnotationRange, JsonPath, OpenFileResponse, OpenResponse, RecentFolder, RootInfo, SearchHit, UpdateState } from '../../shared/types'
 import { jsonReader } from './ipc'
 import { annotationsForItem, decideAnnotationToggle, decideRangeToggle, isAnnotated } from './annotations'
 import type { AnnotationView } from './JsonView'
@@ -78,7 +78,14 @@ function MaximizeIcon(): React.ReactElement {
 }
 
 function fileNameOf(state: State): string | null {
-  if (state.view === 'array' || state.view === 'value' || state.view === 'error') return state.fileName
+  if (
+    state.view === 'array' ||
+    state.view === 'value' ||
+    state.view === 'markdown' ||
+    state.view === 'error'
+  ) {
+    return state.fileName
+  }
   return null
 }
 
@@ -216,26 +223,38 @@ export default function App(): React.ReactElement {
   // Files macOS hands over (double-click, "Open With"): the main process
   // opened them already; here the renderer just adopts the result. A file
   // open replaces the whole view — it is not a folder pick.
-  useEffect(
-    () =>
-      jsonReader.onFileOpened((result) => {
-        pendingFolderIndexRef.current = null
-        if (result.status === 'ok') {
-          setFolder(null)
-          applyOpenedFile(result.fileName, result.root, null)
-          return
-        }
+  const adoptOpened = useCallback(
+    (result: OpenFileResponse) => {
+      pendingFolderIndexRef.current = null
+      if (result.status === 'ok') {
         setFolder(null)
-        setState({
-          view: 'error',
-          fileName: result.fileName,
-          message: result.error,
-          annotate: result.annotatable ? { fileIndex: null } : null
-        })
-        void refreshAnnotations(null)
-      }),
+        applyOpenedFile(result.fileName, result.root, null)
+        return
+      }
+      setFolder(null)
+      setState({
+        view: 'error',
+        fileName: result.fileName,
+        message: result.error,
+        annotate: result.annotatable ? { fileIndex: null } : null
+      })
+      void refreshAnnotations(null)
+    },
     [applyOpenedFile, refreshAnnotations]
   )
+
+  // The live push works while this renderer is mounted; a file opened at
+  // cold launch races that mount, so on start the renderer also pulls
+  // (and clears) the result the main process kept for it.
+  useEffect(() => {
+    void jsonReader
+      .consumeFileOpened()
+      .then((pending) => {
+        if (pending) adoptOpened(pending)
+      })
+      .catch(() => {})
+    return jsonReader.onFileOpened(adoptOpened)
+  }, [adoptOpened])
 
   const openFromFolder = useCallback(
     (index: number, itemIndex?: number) => {

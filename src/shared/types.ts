@@ -201,6 +201,12 @@ export interface JsonReaderApi {
    * app opened it already and the payload is the open's result.
    */
   onFileOpened: (callback: (response: OpenFileResponse) => void) => () => void
+  /**
+   * Pulls the result of the most recent system file open (double-click,
+   * "Open With") and clears it. A renderer that mounts after the open
+   * happened uses this instead of the live push.
+   */
+  consumeFileOpened: () => Promise<OpenFileResponse | null>
   /** Opens an https link in the system browser; refused urls do nothing. */
   openExternal: (url: string) => Promise<void>
   /** The background update check's current state. */

@@ -287,17 +287,29 @@ async function showAndOpenFolder(win: BrowserWindow): Promise<OpenResponse> {
 /* Double-clicking a .json/.md (or "Open With") routes here instead of a
    dialog. The path is opened and the result is pushed to the renderer;
    paths arriving before the window exists wait in queue. */
+let lastFileOpened: OpenFileResponse | null = null
+
 function deliverQueuedOpen(): void {
   const path = queuedOpenPath
-  if (!path || !mainWindow) return
+  if (!path || !mainWindow) {
+    if (process.env.JSON_READER_DEBUG) console.log('[open-file] queued but no window yet:', path)
+    return
+  }
   queuedOpenPath = null
   void openJsonFile(path).then((result) => {
+    // The live push only lands if the renderer already mounted its
+    // listener — a file opened at cold launch races that mount, so the
+    // result also stays consumable: a freshly mounted renderer pulls it
+    // (and clears it) on start.
+    lastFileOpened = result
+    if (process.env.JSON_READER_DEBUG) console.log('[open-file] opened, pushing:', result.fileName, result.status)
     mainWindow?.webContents.send('file-opened', result)
   })
 }
 
 app.on('open-file', (event, filePath) => {
   event.preventDefault()
+  if (process.env.JSON_READER_DEBUG) console.log('[open-file] event received:', filePath)
   queuedOpenPath = filePath
   deliverQueuedOpen()
 })
@@ -803,6 +815,18 @@ async function runUpdateCycle(): Promise<void> {
 }
 
 ipcMain.handle('json:get-update-state', (): UpdateState => updateState)
+
+/**
+ * The renderer pulls the latest file-open result on mount — the cold
+ * launch race means the live push can land before its listener exists.
+ * Consumed once; null when there is nothing pending.
+ */
+ipcMain.handle('json:consume-file-opened', (): OpenFileResponse | null => {
+  const pending = lastFileOpened
+  lastFileOpened = null
+  if (process.env.JSON_READER_DEBUG) console.log('[open-file] consumed:', pending?.fileName ?? 'nothing pending')
+  return pending
+})
 
 ipcMain.handle('json:install-update', async (): Promise<void> => {
   if (updateState.kind !== 'ready') return
