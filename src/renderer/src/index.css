@@ -97,6 +97,35 @@ body {
   margin-left: auto;
 }
 
+/* The Update button takes the version number's slot when a newer release
+   has fully downloaded; an accent pill so it reads as actionable, not
+   informational. */
+.update-button {
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--accent);
+  background: none;
+  border: 1px solid var(--accent);
+  border-radius: 7px;
+  padding: 4px 10px;
+  white-space: nowrap;
+  cursor: pointer;
+  -webkit-app-region: no-drag;
+  /* The version number's pin, shared by whichever occupies the slot. */
+  margin-left: auto;
+}
+
+.update-button:hover {
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+
+.update-button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
 /* Icon tools at the header's left: sidebar toggle plus fullscreen. */
 .header-tools {
   display: flex;
