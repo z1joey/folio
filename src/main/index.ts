@@ -1,6 +1,6 @@
 import { app, BrowserWindow, dialog, ipcMain, Menu, nativeTheme, net, shell } from 'electron'
 import { createWriteStream } from 'node:fs'
-import { mkdir, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
+import { mkdir, readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { lookup } from 'node:dns/promises'
 import type { Readable } from 'node:stream'
 import { basename, join } from 'node:path'
@@ -109,7 +109,7 @@ function createWindow(): void {
     backgroundColor: nativeTheme.shouldUseDarkColors ? '#17181c' : '#f7f7f9',
     titleBarStyle: darwin ? 'hiddenInset' : 'default',
     ...(darwin ? { trafficLightPosition: { x: 16, y: 20 } } : {}),
-    title: 'JSON Reader',
+    title: 'Folio',
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
       sandbox: true,
@@ -684,7 +684,36 @@ function setUpdatesDir(): string {
   return join(app.getPath('userData'), 'updates')
 }
 
-const RELEASE_API_URL = 'https://api.github.com/repos/z1joey/json-reader/releases/latest'
+/**
+ * The app outgrew the json-reader name: its old userData folder holds the
+ * recents file and a downloaded update. One-time move so a rename does
+ * not make users re-teach the app; failures keep the old data in place.
+ * Electron's own caches are left where they are.
+ */
+async function migrateUserData(): Promise<void> {
+  const newData = app.getPath('userData')
+  const oldData = join(newData, '..', 'json-reader')
+  if (oldData === newData) return
+  let entries: string[]
+  try {
+    entries = await readdir(oldData)
+  } catch {
+    return
+  }
+  try {
+    await mkdir(newData, { recursive: true })
+    for (const entry of entries) {
+      if (entry === 'Cache' || entry === 'Code Cache' || entry === 'GPUCache' || entry === 'DawnCache') continue
+      await rm(join(newData, entry), { recursive: true, force: true })
+      await rename(join(oldData, entry), join(newData, entry))
+    }
+    await rm(oldData, { recursive: true, force: true })
+  } catch {
+    // A failed migration keeps the old folder; nothing is lost.
+  }
+}
+
+const RELEASE_API_URL = 'https://api.github.com/repos/z1joey/folio/releases/latest'
 
 async function fetchLatestRelease(): Promise<ParsedUpdate | null> {
   const response = await requestValidated(net, RELEASE_API_URL, { Accept: 'application/vnd.github+json' })
@@ -710,7 +739,7 @@ function currentAppVersion(): string {
 async function downloadUpdateAsset(update: ParsedUpdate): Promise<void> {
   const dir = setUpdatesDir()
   await mkdir(dir, { recursive: true })
-  const destPath = join(dir, `json-reader-${update.version}-arm64.dmg`)
+  const destPath = join(dir, `folio-${update.version}-arm64.dmg`)
   const response = await requestValidated(net, update.downloadUrl)
   if (response.statusCode !== 200) throw new Error(`Download responded ${response.statusCode}`)
   const declaredLength = Number(response.headers['content-length'] ?? 0)
@@ -747,13 +776,13 @@ async function runUpdateCycle(): Promise<void> {
     const dir = setUpdatesDir()
     await mkdir(dir, { recursive: true })
     for (const entry of await readdir(dir)) {
-      if (entry !== `json-reader-${update.version}-arm64.dmg`) {
+      if (entry !== `folio-${update.version}-arm64.dmg`) {
         await rm(join(dir, entry), { force: true })
       }
     }
     // A dmg already on disk with the release's exact size is ready to go —
     // no second download across restarts.
-    const destPath = join(dir, `json-reader-${update.version}-arm64.dmg`)
+    const destPath = join(dir, `folio-${update.version}-arm64.dmg`)
     try {
       const existing = await stat(destPath)
       if (existing.size === update.size) {
@@ -777,12 +806,13 @@ ipcMain.handle('json:get-update-state', (): UpdateState => updateState)
 
 ipcMain.handle('json:install-update', async (): Promise<void> => {
   if (updateState.kind !== 'ready') return
-  const dmgPath = join(setUpdatesDir(), `json-reader-${updateState.version}-arm64.dmg`)
+  const dmgPath = join(setUpdatesDir(), `folio-${updateState.version}-arm64.dmg`)
   const opened = await shell.openPath(dmgPath).catch(() => 'failed')
   if (opened) shell.showItemInFolder(dmgPath)
 })
 
-void app.whenReady().then(() => {
+void app.whenReady().then(async () => {
+  await migrateUserData()
   buildMenu()
   createWindow()
   // A file double-clicked in Finder at launch arrived before the window;

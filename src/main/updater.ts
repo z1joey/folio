@@ -145,7 +145,7 @@ export async function requestValidated(netModule: typeof net, url: string, heade
     await assertResolvablePublicHost(target)
     // eslint-disable-next-line no-await-in-loop -- sequential redirect chain
     const response = await new Promise<import('electron').IncomingMessage>((resolve, reject) => {
-      const request = netModule.request({ method: 'GET', url: target, headers: { 'User-Agent': 'json-reader', ...headers } })
+      const request = netModule.request({ method: 'GET', url: target, headers: { 'User-Agent': 'folio', ...headers } })
       request.on('response', resolve)
       request.on('error', reject)
       request.end()

@@ -1,5 +1,5 @@
-appId: com.z1joey.json-reader
-productName: json-reader
+appId: com.z1joey.folio
+productName: folio
 directories:
   output: dist
 files:
