@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron'
-import type { JsonReaderApi, UpdateState } from '../shared/types'
+import type { JsonReaderApi, OpenFileResponse, UpdateState } from '../shared/types'
 
 const api: JsonReaderApi = {
   openFolder: () => ipcRenderer.invoke('json:open-folder'),
@@ -21,6 +21,11 @@ const api: JsonReaderApi = {
     ipcRenderer.on('fullscreen-changed', listener)
     return () => ipcRenderer.removeListener('fullscreen-changed', listener)
   },
+  onFileOpened: (callback: (response: OpenFileResponse) => void) => {
+    const listener = (_: unknown, response: OpenFileResponse): void => callback(response)
+    ipcRenderer.on('file-opened', listener)
+    return () => ipcRenderer.removeListener('file-opened', listener)
+  },
   getUpdateState: () => ipcRenderer.invoke('json:get-update-state'),
   installUpdate: () => ipcRenderer.invoke('json:install-update'),
   onUpdateStateChanged: (callback: (state: UpdateState) => void) => {
@@ -28,7 +33,8 @@ const api: JsonReaderApi = {
     ipcRenderer.on('update-state-changed', listener)
     return () => ipcRenderer.removeListener('update-state-changed', listener)
   },
-  getVersion: () => ipcRenderer.invoke('json:get-version')
+  getVersion: () => ipcRenderer.invoke('json:get-version'),
+  openExternal: (url: string) => ipcRenderer.invoke('json:open-external', url)
 }
 
 contextBridge.exposeInMainWorld('jsonReader', api)

@@ -4,7 +4,12 @@ import type { JsonPath } from './annotationPath'
 
 export type { JsonPath } from './annotationPath'
 
-export type RootInfo = { type: 'array'; count: number } | { type: 'value'; value: unknown }
+/**
+ * The root shape of an opened file: a JSON array (read item by item), any
+ * other JSON value, or a markdown file's full text (rendered, not JSON at
+ * all).
+ */
+export type RootInfo = { type: 'array'; count: number } | { type: 'value'; value: unknown } | { type: 'markdown'; text: string }
 
 export type OpenResponse =
   | { status: 'canceled' }
@@ -191,6 +196,13 @@ export interface JsonReaderApi {
   onOpenFolderRequested: (callback: () => void) => () => void
   /** Fired when the window enters or leaves native (system) fullscreen. */
   onFullscreenChanged: (callback: (isFullscreen: boolean) => void) => () => void
+  /**
+   * Fired when macOS hands a file over (double-click, "Open With"): the
+   * app opened it already and the payload is the open's result.
+   */
+  onFileOpened: (callback: (response: OpenFileResponse) => void) => () => void
+  /** Opens an https link in the system browser; refused urls do nothing. */
+  openExternal: (url: string) => Promise<void>
   /** The background update check's current state. */
   getUpdateState: () => Promise<UpdateState>
   /** Opens the downloaded installer dmg; resolves once handed to the OS. */

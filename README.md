@@ -1,18 +1,19 @@
-# JSON Reader
+# Folio
 
-[![CI](https://github.com/z1joey/json-reader/actions/workflows/ci.yml/badge.svg)](https://github.com/z1joey/json-reader/actions/workflows/ci.yml)
-[![Release](https://github.com/z1joey/json-reader/actions/workflows/release.yml/badge.svg)](https://github.com/z1joey/json-reader/actions/workflows/release.yml)
+[![CI](https://github.com/z1joey/folio/actions/workflows/ci.yml/badge.svg)](https://github.com/z1joey/folio/actions/workflows/ci.yml)
+[![Release](https://github.com/z1joey/folio/actions/workflows/release.yml/badge.svg)](https://github.com/z1joey/folio/actions/workflows/release.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-A minimal, read-only desktop viewer for JSON files, built for one job: making
-large JSON pleasant to read.
+A minimal, read-only desktop reader for JSON and Markdown, built for one job:
+making large documents pleasant to read.
 
 Point it at a folder and read. Files whose root is a big array — exports,
 dumps, logs, datasets — are shown one item at a time with keyboard paging, so
-even multi-gigabyte files open instantly. Every other JSON value is rendered
-as a structured, human-readable document.
+even multi-gigabyte files open instantly. Other JSON values render as
+structured, human-readable documents, and markdown files (or markdown-shaped
+strings inside JSON) render as formatted documents.
 
-![JSON Reader with a folder of dictionary files open: the header carries icon tools for the sidebar, a global expand/collapse toggle, and fullscreen reading; the sidebar lists the folder's JSON files; a word entry renders as a readable outline — tags as pills, an annotated span highlighted inside a sentence — and the pager shows item 1 of 1](assets/screenshot.png)
+![Folio with a folder of dictionary files open: the header carries icon tools for the sidebar, a global expand/collapse toggle, and fullscreen reading; the sidebar lists the folder's JSON files; a word entry renders as a readable outline — tags as pills, an annotated span highlighted inside a sentence — and the pager shows item 1 of 1](assets/screenshot.png)
 
 ## Highlights
 
@@ -20,9 +21,20 @@ as a structured, human-readable document.
   byte-level scan that records only the byte range of each top-level element;
   an element is read and parsed only when you page to it. Navigating never
   re-reads the file, and memory stays flat no matter the file size.
-- **Folder reading.** `⌘/Ctrl+O` opens a folder; its top-level `.json` files
-  are listed in a collapsible sidebar to click through, and search finds
-  files too. A folder with a single JSON file behaves like a plain file open.
+- **Folder reading.** `⌘/Ctrl+O` opens a folder; its top-level `.json` and
+  `.md` files are listed in a collapsible sidebar to click through, and
+  search finds files too. A folder with a single file behaves like a plain
+  file open. Markdown files render as formatted documents (GFM tables, task
+  lists, fenced code) with a toggle back to the raw source; markdown-shaped
+  string values inside JSON get the same toggle beside the value.
+- **Set it as the default viewer.** The app declares `.json` and `.md`
+  document types, so after installing you can select a file in Finder,
+  choose *Open With → Folio*, and make it the default with
+  *Open With → Other → Use this application always*. Double-clicking a file
+  then opens it directly in the reader. If the entry doesn't show up right
+  away, log out and back in (or run
+  `/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f /Applications/folio.app`)
+  to refresh Launch Services.
 - **Search that ranks.** Case-insensitive search across every JSON file in
   the opened folder, ranked by match quality: exact string values first, then
   value prefixes, then any occurrence. Results show the file, the enclosing
@@ -64,8 +76,8 @@ as a structured, human-readable document.
 
 ## Download
 
-Grab the latest `json-reader-<version>-arm64.dmg` from the
-[Releases page](https://github.com/z1joey/json-reader/releases) (macOS,
+Grab the latest `folio-<version>-arm64.dmg` from the
+[Releases page](https://github.com/z1joey/folio/releases) (macOS,
 Apple Silicon). Prebuilt packages currently cover macOS only; on Intel Macs,
 Windows, or Linux, [run it from source](#development) instead.
 
@@ -76,7 +88,7 @@ notarization. After moving the app to `/Applications`, clear the download
 quarantine once:
 
 ```sh
-xattr -cr /Applications/json-reader.app
+xattr -cr /Applications/folio.app
 ```
 
 Alternatively, use **Open Anyway** in System Settings → Privacy & Security.
@@ -130,7 +142,7 @@ npm run typecheck
 ### CI and releases
 
 Two GitHub Actions workflows live in `.github/workflows/`; run history is on
-the [Actions tab](https://github.com/z1joey/json-reader/actions).
+the [Actions tab](https://github.com/z1joey/folio/actions).
 
 - **CI** (`ci.yml`) — runs on every push to `main` and every pull request:
   installs dependencies, then typechecks, runs the unit tests, and does a
@@ -145,7 +157,7 @@ release:
 
 1. Bump `version` in `package.json` and commit it.
 2. Tag and push: `git tag v0.2.1 && git push origin v0.2.1`.
-3. The Release workflow attaches `json-reader-0.2.1-arm64.dmg` to a GitHub
+3. The Release workflow attaches `folio-0.2.1-arm64.dmg` to a GitHub
    Release with generated notes.
 
 Re-releasing the same version requires deleting both the GitHub Release and

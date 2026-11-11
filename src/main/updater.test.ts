@@ -34,21 +34,21 @@ describe('isNewerVersion', () => {
 describe('parseLatestRelease', () => {
   const release = (version: string, assetName: string) => ({
     tag_name: `v${version}`,
-    assets: [{ name: assetName, browser_download_url: `https://github.com/z1joey/json-reader/releases/download/v${version}/${assetName}`, size: 118502975 }]
+    assets: [{ name: assetName, browser_download_url: `https://github.com/z1joey/folio/releases/download/v${version}/${assetName}`, size: 118502975 }]
   })
 
   it('extracts version, url and size from a newer release', () => {
-    const parsed = parseLatestRelease(release('0.5.0', 'json-reader-0.5.0-arm64.dmg'), '0.4.0')
+    const parsed = parseLatestRelease(release('0.5.0', 'folio-0.5.0-arm64.dmg'), '0.4.0')
     expect(parsed).toEqual({
       version: '0.5.0',
-      downloadUrl: 'https://github.com/z1joey/json-reader/releases/download/v0.5.0/json-reader-0.5.0-arm64.dmg',
+      downloadUrl: 'https://github.com/z1joey/folio/releases/download/v0.5.0/folio-0.5.0-arm64.dmg',
       size: 118502975
     })
   })
 
   it('returns null when the release is not newer than the running version', () => {
-    expect(parseLatestRelease(release('0.4.0', 'json-reader-0.4.0-arm64.dmg'), '0.4.0')).toBeNull()
-    expect(parseLatestRelease(release('0.3.9', 'json-reader-0.3.9-arm64.dmg'), '0.4.0')).toBeNull()
+    expect(parseLatestRelease(release('0.4.0', 'folio-0.4.0-arm64.dmg'), '0.4.0')).toBeNull()
+    expect(parseLatestRelease(release('0.3.9', 'folio-0.3.9-arm64.dmg'), '0.4.0')).toBeNull()
   })
 
   it('returns null when the arm64 dmg asset is missing', () => {
@@ -66,10 +66,10 @@ describe('parseLatestRelease', () => {
 
 describe('isSafeDownloadUrl', () => {
   it('accepts https urls on the allowlisted hosts', () => {
-    expect(isSafeDownloadUrl('https://github.com/z1joey/json-reader/releases/download/v0.5.0/json-reader-0.5.0-arm64.dmg')).toBe(true)
+    expect(isSafeDownloadUrl('https://github.com/z1joey/folio/releases/download/v0.5.0/folio-0.5.0-arm64.dmg')).toBe(true)
     expect(isSafeDownloadUrl('https://objects.githubusercontent.com/some/signed/path')).toBe(true)
     expect(isSafeDownloadUrl('https://release-assets.githubusercontent.com/some/path')).toBe(true)
-    expect(isSafeDownloadUrl('https://api.github.com/repos/z1joey/json-reader/releases/latest')).toBe(true)
+    expect(isSafeDownloadUrl('https://api.github.com/repos/z1joey/folio/releases/latest')).toBe(true)
   })
 
   it('rejects non-https schemes and non-allowlisted hosts', () => {

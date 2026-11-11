@@ -1,6 +1,7 @@
 import { app, BrowserWindow, dialog, ipcMain, Menu, nativeTheme, net, shell } from 'electron'
 import { createWriteStream } from 'node:fs'
-import { mkdir, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
+import { mkdir, readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises'
+import { lookup } from 'node:dns/promises'
 import type { Readable } from 'node:stream'
 import { basename, join } from 'node:path'
 import { JsonFile, JsonError, searchText } from './jsonFile'
@@ -42,9 +43,41 @@ let currentFileName: string | null = null
 // open, because an unreadable file is exactly the kind worth annotating.
 let currentFilePath: string | null = null
 let currentFolderFiles: string[] | null = null
+// A path macOS handed over from a double-click or "Open With" before the
+// window existed; delivered once the window is ready.
+let queuedOpenPath: string | null = null
 let searchSeq = 0
 
 const FOLDER_SEARCH_LIMIT = 10
+
+/** Markdown previews read whole files; anything past this is refused. */
+const MAX_MARKDOWN_BYTES = 5 * 1024 * 1024
+
+/**
+ * True for loopback, private, link-local and other reserved addresses —
+ * the DNS answer a public hostname must never produce before the shell
+ * opens a link. (v4: 127/8, 10/8, 172.16/12, 192.168/16, 169.254/16,
+ * 0/8, 100.64/10; v6: ::1, ::, fc00::/7, fe80::/10, ff00::/8.)
+ */
+function isPrivateAddress(ip: string): boolean {
+  const v4 = ip.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/)
+  if (v4) {
+    const [a, b, c, d] = [Number(v4[1]), Number(v4[2]), Number(v4[3]), Number(v4[4])]
+    if ([a, b, c, d].some((n) => n > 255)) return false
+    if (a === 127 || a === 10 || a === 0) return true
+    if (a === 172 && b >= 16 && b <= 31) return true
+    if (a === 192 && b === 168) return true
+    if (a === 169 && b === 254) return true
+    if (a === 100 && b >= 64 && b <= 127) return true
+    return false
+  }
+  const v6 = ip.toLowerCase()
+  if (v6 === '::1' || v6 === '::') return true
+  if (/^f[cd][0-9a-f]{2}:/.test(v6)) return true
+  if (/^fe[89ab][0-9a-f]:/.test(v6)) return true
+  if (/^ff[0-9a-f]{2}:/.test(v6)) return true
+  return false
+}
 
 type FolderSearchEntry = { file: JsonFile | null; text: string | null }
 
@@ -76,7 +109,7 @@ function createWindow(): void {
     backgroundColor: nativeTheme.shouldUseDarkColors ? '#17181c' : '#f7f7f9',
     titleBarStyle: darwin ? 'hiddenInset' : 'default',
     ...(darwin ? { trafficLightPosition: { x: 16, y: 20 } } : {}),
-    title: 'JSON Reader',
+    title: 'Folio',
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
       sandbox: true,
@@ -146,11 +179,30 @@ async function closeCurrentFile(): Promise<void> {
   }
 }
 
+/**
+ * Reads a markdown file as plain text. Markdown files are small by
+ * nature; a cap keeps a stray huge file from freezing the renderer.
+ */
+async function readMarkdownFile(path: string): Promise<string> {
+  const info = await stat(path)
+  if (info.size > MAX_MARKDOWN_BYTES) {
+    throw new JsonError('This markdown file is too large to preview.')
+  }
+  return readFile(path, 'utf8')
+}
+
 /** Opens `path` as the current file, replacing whatever was open before. */
 async function openJsonFile(path: string): Promise<OpenFileResponse> {
   const fileName = basename(path)
   currentFilePath = path
   try {
+    // Markdown files read as plain text — no JSON scan, no annotations.
+    if (/\.md$/i.test(fileName)) {
+      const text = await readMarkdownFile(path)
+      currentFile = null
+      currentFileName = fileName
+      return { status: 'ok', fileName, root: { type: 'markdown', text } }
+    }
     await closeCurrentFile()
     const file = await JsonFile.open(path)
     currentFile = file
@@ -188,7 +240,7 @@ async function openFolderPath(path: string): Promise<OpenResponse> {
   try {
     const entries = await readdir(path, { withFileTypes: true })
     names = entries
-      .filter((entry) => entry.isFile() && !entry.name.startsWith('.') && /\.json$/i.test(entry.name))
+      .filter((entry) => entry.isFile() && !entry.name.startsWith('.') && /\.(json|md)$/i.test(entry.name))
       .map((entry) => entry.name)
       .sort(compareFileWithSidecars)
   } catch {
@@ -205,7 +257,7 @@ async function openFolderPath(path: string): Promise<OpenResponse> {
     return {
       status: 'error',
       fileName: basename(path),
-      error: 'No JSON files found in this folder. Please choose another folder.'
+      error: 'No JSON or Markdown files found in this folder. Please choose another folder.'
     }
   }
   // A successful open puts the folder at the front of the recents.
@@ -229,6 +281,37 @@ async function showAndOpenFolder(win: BrowserWindow): Promise<OpenResponse> {
   if (picked.canceled || picked.filePaths.length === 0) return { status: 'canceled' }
   return openFolderPath(picked.filePaths[0])
 }
+
+/* ── Files handed over by macOS ─────────────────────────────────────── */
+
+/* Double-clicking a .json/.md (or "Open With") routes here instead of a
+   dialog. The path is opened and the result is pushed to the renderer;
+   paths arriving before the window exists wait in queue. */
+function deliverQueuedOpen(): void {
+  const path = queuedOpenPath
+  if (!path || !mainWindow) return
+  queuedOpenPath = null
+  void openJsonFile(path).then((result) => {
+    mainWindow?.webContents.send('file-opened', result)
+  })
+}
+
+app.on('open-file', (event, filePath) => {
+  event.preventDefault()
+  queuedOpenPath = filePath
+  deliverQueuedOpen()
+})
+
+// 'open-files' (multi-select) has no typed overload in this electron
+// version's app event map, but the runtime event exists on macOS.
+;(app as unknown as {
+  on: (event: string, listener: (event: { preventDefault(): void }, paths: string[]) => void) => void
+}).on('open-files', (event, paths) => {
+  event.preventDefault()
+  if (paths.length === 0) return
+  queuedOpenPath = paths[0]
+  deliverQueuedOpen()
+})
 
 /* ── Recently opened folders ────────────────────────────────────────── */
 
@@ -416,6 +499,25 @@ ipcMain.handle('json:search', (_event, query: unknown): Promise<SearchResponse> 
 
 ipcMain.handle('json:get-version', (): string => app.getVersion())
 
+/**
+ * Opens a markdown link in the system browser. The url must be https and
+ * public — localhost, private ranges and other schemes never reach the
+ * shell; a refused link just does nothing.
+ */
+ipcMain.handle('json:open-external', async (_event, url: unknown): Promise<void> => {
+  if (typeof url !== 'string') return
+  try {
+    const parsed = new URL(url)
+    if (parsed.protocol !== 'https:') return
+    if (parsed.username || parsed.password) return
+    const addresses = await lookup(parsed.hostname, { all: true }).catch(() => [])
+    if (addresses.length > 0 && addresses.every((entry) => isPrivateAddress(entry.address))) return
+    await shell.openExternal(parsed.toString())
+  } catch {
+    // A malformed url is not an error worth surfacing.
+  }
+})
+
 /** Resolves the annotation target: a folder file by index, or the open single file. */
 function annotationTargetPath(fileIndex: number | null): string | null {
   if (fileIndex !== null) {
@@ -582,7 +684,36 @@ function setUpdatesDir(): string {
   return join(app.getPath('userData'), 'updates')
 }
 
-const RELEASE_API_URL = 'https://api.github.com/repos/z1joey/json-reader/releases/latest'
+/**
+ * The app outgrew the json-reader name: its old userData folder holds the
+ * recents file and a downloaded update. One-time move so a rename does
+ * not make users re-teach the app; failures keep the old data in place.
+ * Electron's own caches are left where they are.
+ */
+async function migrateUserData(): Promise<void> {
+  const newData = app.getPath('userData')
+  const oldData = join(newData, '..', 'json-reader')
+  if (oldData === newData) return
+  let entries: string[]
+  try {
+    entries = await readdir(oldData)
+  } catch {
+    return
+  }
+  try {
+    await mkdir(newData, { recursive: true })
+    for (const entry of entries) {
+      if (entry === 'Cache' || entry === 'Code Cache' || entry === 'GPUCache' || entry === 'DawnCache') continue
+      await rm(join(newData, entry), { recursive: true, force: true })
+      await rename(join(oldData, entry), join(newData, entry))
+    }
+    await rm(oldData, { recursive: true, force: true })
+  } catch {
+    // A failed migration keeps the old folder; nothing is lost.
+  }
+}
+
+const RELEASE_API_URL = 'https://api.github.com/repos/z1joey/folio/releases/latest'
 
 async function fetchLatestRelease(): Promise<ParsedUpdate | null> {
   const response = await requestValidated(net, RELEASE_API_URL, { Accept: 'application/vnd.github+json' })
@@ -608,7 +739,7 @@ function currentAppVersion(): string {
 async function downloadUpdateAsset(update: ParsedUpdate): Promise<void> {
   const dir = setUpdatesDir()
   await mkdir(dir, { recursive: true })
-  const destPath = join(dir, `json-reader-${update.version}-arm64.dmg`)
+  const destPath = join(dir, `folio-${update.version}-arm64.dmg`)
   const response = await requestValidated(net, update.downloadUrl)
   if (response.statusCode !== 200) throw new Error(`Download responded ${response.statusCode}`)
   const declaredLength = Number(response.headers['content-length'] ?? 0)
@@ -645,13 +776,13 @@ async function runUpdateCycle(): Promise<void> {
     const dir = setUpdatesDir()
     await mkdir(dir, { recursive: true })
     for (const entry of await readdir(dir)) {
-      if (entry !== `json-reader-${update.version}-arm64.dmg`) {
+      if (entry !== `folio-${update.version}-arm64.dmg`) {
         await rm(join(dir, entry), { force: true })
       }
     }
     // A dmg already on disk with the release's exact size is ready to go —
     // no second download across restarts.
-    const destPath = join(dir, `json-reader-${update.version}-arm64.dmg`)
+    const destPath = join(dir, `folio-${update.version}-arm64.dmg`)
     try {
       const existing = await stat(destPath)
       if (existing.size === update.size) {
@@ -675,14 +806,18 @@ ipcMain.handle('json:get-update-state', (): UpdateState => updateState)
 
 ipcMain.handle('json:install-update', async (): Promise<void> => {
   if (updateState.kind !== 'ready') return
-  const dmgPath = join(setUpdatesDir(), `json-reader-${updateState.version}-arm64.dmg`)
+  const dmgPath = join(setUpdatesDir(), `folio-${updateState.version}-arm64.dmg`)
   const opened = await shell.openPath(dmgPath).catch(() => 'failed')
   if (opened) shell.showItemInFolder(dmgPath)
 })
 
-void app.whenReady().then(() => {
+void app.whenReady().then(async () => {
+  await migrateUserData()
   buildMenu()
   createWindow()
+  // A file double-clicked in Finder at launch arrived before the window;
+  // hand it over now that the renderer exists.
+  deliverQueuedOpen()
   void runUpdateCycle()
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()

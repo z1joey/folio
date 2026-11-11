@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { basename, join } from 'node:path'
 import type { AnnotationsResponse, OpenFileResponse, OpenResponse, RecentFolder, SearchResponse } from '../shared/types'
@@ -115,6 +116,32 @@ describe('window setup', () => {
       expect(options?.trafficLightPosition).toBeUndefined()
     }
   })
+
+  it('declares json and markdown document associations', () => {
+    const yml = readFileSync(join(process.cwd(), 'electron-builder.yml'), 'utf8')
+    expect(yml).toContain('fileAssociations:')
+    expect(yml).toContain('ext: json')
+    expect(yml).toContain('ext: md')
+  })
+
+  it('opens files macOS hands over and pushes the result to the renderer', async () => {
+    const folder = await folderFixture('open-file-md', { 'readme.md': '# Handed over' })
+    const registered = appMock.on.mock.calls.filter(([evt]) => evt === 'open-file' || evt === 'open-files')
+    expect(registered.length).toBeGreaterThanOrEqual(2)
+    const entry = registered.find(([evt]) => evt === 'open-file') as [string, (event: { preventDefault(): void }, path: string) => void]
+    const event = { preventDefault: vi.fn() }
+    entry[1](event, join(folder, 'readme.md'))
+    expect(event.preventDefault).toHaveBeenCalled()
+    const win = browserWindowMock.mock.results[0]?.value as { webContents: { send: ReturnType<typeof vi.fn> } }
+    await vi.waitFor(() => {
+      const opened = win.webContents.send.mock.calls.find(([channel]) => channel === 'file-opened')
+      expect(opened?.[1]).toMatchObject({
+        status: 'ok',
+        fileName: 'readme.md',
+        root: { type: 'markdown', text: '# Handed over' }
+      })
+    })
+  })
 })
 
 describe('open folder', () => {
@@ -141,8 +168,37 @@ describe('open folder', () => {
     expect(result).toEqual({
       status: 'error',
       fileName: 'empty',
-      error: 'No JSON files found in this folder. Please choose another folder.'
+      error: 'No JSON or Markdown files found in this folder. Please choose another folder.'
     })
+  })
+
+  it('lists markdown files alongside json ones', async () => {
+    const folder = await folderFixture('mixed', { 'notes.md': '# Notes', 'data.json': '[1]' })
+    pick(folder)
+    const result = await openFolder()
+    expect(result).toEqual({ status: 'folder', folderName: 'mixed', files: ['data.json', 'notes.md'] })
+  })
+
+  it('opens a markdown file as a markdown root', async () => {
+    const folder = await folderFixture('md-open', { 'readme.md': '# Hello\n\nworld body' })
+    pick(folder)
+    // A folder with a single .md file opens it directly, like a lone json.
+    const result = await openFolder()
+    expect(result).toEqual({
+      status: 'ok',
+      fileName: 'readme.md',
+      root: { type: 'markdown', text: '# Hello\n\nworld body' }
+    })
+  })
+
+  it('refuses markdown files past the preview size cap', async () => {
+    const folder = await folderFixture('md-huge', { 'big.md': '# '.repeat(3 * 1024 * 1024) })
+    pick(folder)
+    // A lone .md opens directly from the folder call itself.
+    const result = await openFolder()
+    expect(result.status).toBe('error')
+    if (result.status !== 'error') return
+    expect(result.error).toBe('This markdown file is too large to preview.')
   })
 
   it('opens the only JSON file of a folder directly, without a folder panel', async () => {

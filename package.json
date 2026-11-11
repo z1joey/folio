@@ -1,7 +1,7 @@
 {
-  "name": "json-reader",
-  "version": "0.4.0",
-  "description": "A minimal, read-only JSON file viewer for desktop",
+  "name": "folio",
+  "version": "0.5.0",
+  "description": "A quiet, read-only desktop reader for JSON and Markdown",
   "main": "./out/main/index.js",
   "author": "Joey Zhang",
   "license": "MIT",
@@ -31,5 +31,9 @@
     "esbuild@0.25.12": true,
     "esbuild@0.28.2": true,
     "electron@43.4.0": true
+  },
+  "dependencies": {
+    "react-markdown": "^10.1.0",
+    "remark-gfm": "^4.0.1"
   }
 }
