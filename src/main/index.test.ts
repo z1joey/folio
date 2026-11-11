@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { basename, join } from 'node:path'
 import type { AnnotationsResponse, OpenFileResponse, OpenResponse, RecentFolder, SearchResponse } from '../shared/types'
@@ -114,6 +115,32 @@ describe('window setup', () => {
     } else {
       expect(options?.trafficLightPosition).toBeUndefined()
     }
+  })
+
+  it('declares json and markdown document associations', () => {
+    const yml = readFileSync(join(process.cwd(), 'electron-builder.yml'), 'utf8')
+    expect(yml).toContain('fileAssociations:')
+    expect(yml).toContain('ext: json')
+    expect(yml).toContain('ext: md')
+  })
+
+  it('opens files macOS hands over and pushes the result to the renderer', async () => {
+    const folder = await folderFixture('open-file-md', { 'readme.md': '# Handed over' })
+    const registered = appMock.on.mock.calls.filter(([evt]) => evt === 'open-file' || evt === 'open-files')
+    expect(registered.length).toBeGreaterThanOrEqual(2)
+    const entry = registered.find(([evt]) => evt === 'open-file') as [string, (event: { preventDefault(): void }, path: string) => void]
+    const event = { preventDefault: vi.fn() }
+    entry[1](event, join(folder, 'readme.md'))
+    expect(event.preventDefault).toHaveBeenCalled()
+    const win = browserWindowMock.mock.results[0]?.value as { webContents: { send: ReturnType<typeof vi.fn> } }
+    await vi.waitFor(() => {
+      const opened = win.webContents.send.mock.calls.find(([channel]) => channel === 'file-opened')
+      expect(opened?.[1]).toMatchObject({
+        status: 'ok',
+        fileName: 'readme.md',
+        root: { type: 'markdown', text: '# Handed over' }
+      })
+    })
   })
 })
 

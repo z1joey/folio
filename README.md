@@ -20,9 +20,20 @@ as a structured, human-readable document.
   byte-level scan that records only the byte range of each top-level element;
   an element is read and parsed only when you page to it. Navigating never
   re-reads the file, and memory stays flat no matter the file size.
-- **Folder reading.** `⌘/Ctrl+O` opens a folder; its top-level `.json` files
-  are listed in a collapsible sidebar to click through, and search finds
-  files too. A folder with a single JSON file behaves like a plain file open.
+- **Folder reading.** `⌘/Ctrl+O` opens a folder; its top-level `.json` and
+  `.md` files are listed in a collapsible sidebar to click through, and
+  search finds files too. A folder with a single file behaves like a plain
+  file open. Markdown files render as formatted documents (GFM tables, task
+  lists, fenced code) with a toggle back to the raw source; markdown-shaped
+  string values inside JSON get the same toggle beside the value.
+- **Set it as the default viewer.** The app declares `.json` and `.md`
+  document types, so after installing you can select a file in Finder,
+  choose *Open With → JSON Reader*, and make it the default with
+  *Open With → Other → Use this application always*. Double-clicking a file
+  then opens it directly in the reader. If the entry doesn't show up right
+  away, log out and back in (or run
+  `/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f /Applications/json-reader.app`)
+  to refresh Launch Services.
 - **Search that ranks.** Case-insensitive search across every JSON file in
   the opened folder, ranked by match quality: exact string values first, then
   value prefixes, then any occurrence. Results show the file, the enclosing

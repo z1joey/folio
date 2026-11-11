@@ -188,6 +188,11 @@ export interface JsonReaderApi {
   onOpenFolderRequested: (callback: () => void) => () => void
   /** Fired when the window enters or leaves native (system) fullscreen. */
   onFullscreenChanged: (callback: (isFullscreen: boolean) => void) => () => void
+  /**
+   * Fired when macOS hands a file over (double-click, "Open With"): the
+   * app opened it already and the payload is the open's result.
+   */
+  onFileOpened: (callback: (response: OpenFileResponse) => void) => () => void
   /** Opens an https link in the system browser; refused urls do nothing. */
   openExternal: (url: string) => Promise<void>
   /** The app version declared in package.json (e.g. "0.1.0"). */

@@ -205,6 +205,30 @@ export default function App(): React.ReactElement {
     [applyOpenedFile, refreshAnnotations]
   )
 
+  // Files macOS hands over (double-click, "Open With"): the main process
+  // opened them already; here the renderer just adopts the result. A file
+  // open replaces the whole view — it is not a folder pick.
+  useEffect(
+    () =>
+      jsonReader.onFileOpened((result) => {
+        pendingFolderIndexRef.current = null
+        if (result.status === 'ok') {
+          setFolder(null)
+          applyOpenedFile(result.fileName, result.root, null)
+          return
+        }
+        setFolder(null)
+        setState({
+          view: 'error',
+          fileName: result.fileName,
+          message: result.error,
+          annotate: result.annotatable ? { fileIndex: null } : null
+        })
+        void refreshAnnotations(null)
+      }),
+    [applyOpenedFile, refreshAnnotations]
+  )
+
   const openFromFolder = useCallback(
     (index: number, itemIndex?: number) => {
       if (loadingRef.current) {

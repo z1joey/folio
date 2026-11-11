@@ -10,6 +10,16 @@ mac:
     - target: dmg
       arch:
         - arm64
+  # Document associations: without these the Info.plist declares no file
+  # types, so LaunchServices never offers json-reader as an "Open With"
+  # choice for .json/.md and they can't be set as the default handler.
+  fileAssociations:
+    - ext: json
+      name: JSON document
+      role: Viewer
+    - ext: md
+      name: Markdown document
+      role: Viewer
   # Ad-hoc signing (no Apple developer certificate): re-signs the packaged
   # bundle so its seal matches its contents. Without this the download is
   # reported as damaged by Gatekeeper. Hardened runtime stays off — ad-hoc

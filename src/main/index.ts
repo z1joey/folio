@@ -40,6 +40,9 @@ let currentFileName: string | null = null
 // open, because an unreadable file is exactly the kind worth annotating.
 let currentFilePath: string | null = null
 let currentFolderFiles: string[] | null = null
+// A path macOS handed over from a double-click or "Open With" before the
+// window existed; delivered once the window is ready.
+let queuedOpenPath: string | null = null
 let searchSeq = 0
 
 const FOLDER_SEARCH_LIMIT = 10
@@ -275,6 +278,37 @@ async function showAndOpenFolder(win: BrowserWindow): Promise<OpenResponse> {
   if (picked.canceled || picked.filePaths.length === 0) return { status: 'canceled' }
   return openFolderPath(picked.filePaths[0])
 }
+
+/* ── Files handed over by macOS ─────────────────────────────────────── */
+
+/* Double-clicking a .json/.md (or "Open With") routes here instead of a
+   dialog. The path is opened and the result is pushed to the renderer;
+   paths arriving before the window exists wait in queue. */
+function deliverQueuedOpen(): void {
+  const path = queuedOpenPath
+  if (!path || !mainWindow) return
+  queuedOpenPath = null
+  void openJsonFile(path).then((result) => {
+    mainWindow?.webContents.send('file-opened', result)
+  })
+}
+
+app.on('open-file', (event, filePath) => {
+  event.preventDefault()
+  queuedOpenPath = filePath
+  deliverQueuedOpen()
+})
+
+// 'open-files' (multi-select) has no typed overload in this electron
+// version's app event map, but the runtime event exists on macOS.
+;(app as unknown as {
+  on: (event: string, listener: (event: { preventDefault(): void }, paths: string[]) => void) => void
+}).on('open-files', (event, paths) => {
+  event.preventDefault()
+  if (paths.length === 0) return
+  queuedOpenPath = paths[0]
+  deliverQueuedOpen()
+})
 
 /* ── Recently opened folders ────────────────────────────────────────── */
 
@@ -629,6 +663,9 @@ ipcMain.handle('json:remove-annotation', async (_event, request: unknown): Promi
 void app.whenReady().then(() => {
   buildMenu()
   createWindow()
+  // A file double-clicked in Finder at launch arrived before the window;
+  // hand it over now that the renderer exists.
+  deliverQueuedOpen()
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()
   })
