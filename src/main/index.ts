@@ -1,8 +1,11 @@
-import { app, BrowserWindow, dialog, ipcMain, Menu, nativeTheme } from 'electron'
-import { readdir, readFile, stat, writeFile } from 'node:fs/promises'
+import { app, BrowserWindow, dialog, ipcMain, Menu, nativeTheme, net, shell } from 'electron'
+import { createWriteStream } from 'node:fs'
+import { mkdir, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
+import type { Readable } from 'node:stream'
 import { basename, join } from 'node:path'
 import { JsonFile, JsonError, searchText } from './jsonFile'
 import { parseRecentFolders, withRecentFolder, type RecentFolder } from './recentFolders'
+import { parseLatestRelease, requestValidated, type ParsedUpdate } from './updater'
 import {
   annotationFilePathFor,
   annotationIdAtRange,
@@ -558,9 +561,129 @@ ipcMain.handle('json:remove-annotation', async (_event, request: unknown): Promi
   })
 })
 
+/* ── Background update check ────────────────────────────────────────── */
+
+/* A lightweight manual-update flow: on startup the app asks GitHub for
+   its latest release; a newer one is downloaded into userData/updates and
+   the renderer swaps the version number for an Update button. Nothing
+   here is allowed to break startup — every failure stays silent and the
+   next launch retries. The ad-hoc signature rules out electron-updater,
+   so installation stays the familiar drag-from-DMG flow. */
+
+type UpdateState = { kind: 'idle' } | { kind: 'downloading'; version: string } | { kind: 'ready'; version: string }
+
+let updateState: UpdateState = { kind: 'idle' }
+
+function pushUpdateState(): void {
+  mainWindow?.webContents.send('update-state-changed', updateState)
+}
+
+function setUpdatesDir(): string {
+  return join(app.getPath('userData'), 'updates')
+}
+
+const RELEASE_API_URL = 'https://api.github.com/repos/z1joey/json-reader/releases/latest'
+
+async function fetchLatestRelease(): Promise<ParsedUpdate | null> {
+  const response = await requestValidated(net, RELEASE_API_URL, { Accept: 'application/vnd.github+json' })
+  if (response.statusCode !== 200) return null
+  const body = await new Promise<string>((resolve, reject) => {
+    const chunks: Buffer[] = []
+    response.on('data', (chunk: Buffer) => chunks.push(chunk))
+    response.on('end', () => resolve(Buffer.concat(chunks).toString('utf8')))
+    response.on('error', reject)
+  })
+  try {
+    return parseLatestRelease(JSON.parse(body), currentAppVersion())
+  } catch {
+    return null
+  }
+}
+
+/** The running version; JSON_READER_FAKE_VERSION lets dev pretend older. */
+function currentAppVersion(): string {
+  return process.env.JSON_READER_FAKE_VERSION ?? app.getVersion()
+}
+
+async function downloadUpdateAsset(update: ParsedUpdate): Promise<void> {
+  const dir = setUpdatesDir()
+  await mkdir(dir, { recursive: true })
+  const destPath = join(dir, `json-reader-${update.version}-arm64.dmg`)
+  const response = await requestValidated(net, update.downloadUrl)
+  if (response.statusCode !== 200) throw new Error(`Download responded ${response.statusCode}`)
+  const declaredLength = Number(response.headers['content-length'] ?? 0)
+  if (declaredLength && update.size && declaredLength !== update.size) {
+    throw new Error(`Download size ${declaredLength} does not match the release asset ${update.size}`)
+  }
+  let received = 0
+  const body = response as unknown as Readable
+  const file = createWriteStream(destPath)
+  await new Promise<void>((resolve, reject) => {
+    body.on('data', (chunk: Buffer) => {
+      received += chunk.length
+      if (received > update.size) {
+        body.destroy(new Error('Download exceeded the release asset size'))
+      }
+    })
+    body.on('error', reject)
+    file.on('error', reject)
+    file.on('finish', () => resolve())
+    body.pipe(file)
+  })
+  if (received !== update.size) throw new Error(`Download truncated: ${received} of ${update.size} bytes`)
+  updateState = { kind: 'ready', version: update.version }
+  pushUpdateState()
+}
+
+/** One check-and-download cycle; failures land here and stay silent. */
+async function runUpdateCycle(): Promise<void> {
+  try {
+    if (!app.isPackaged && process.env.JSON_READER_FORCE_UPDATE_CHECK !== '1') return
+    const update = await fetchLatestRelease()
+    if (!update) return
+    // Cached downloads of anything but the pending release are stale.
+    const dir = setUpdatesDir()
+    await mkdir(dir, { recursive: true })
+    for (const entry of await readdir(dir)) {
+      if (entry !== `json-reader-${update.version}-arm64.dmg`) {
+        await rm(join(dir, entry), { force: true })
+      }
+    }
+    // A dmg already on disk with the release's exact size is ready to go —
+    // no second download across restarts.
+    const destPath = join(dir, `json-reader-${update.version}-arm64.dmg`)
+    try {
+      const existing = await stat(destPath)
+      if (existing.size === update.size) {
+        updateState = { kind: 'ready', version: update.version }
+        pushUpdateState()
+        return
+      }
+    } catch {
+      // No cached download yet — fetch it in the background.
+    }
+    updateState = { kind: 'downloading', version: update.version }
+    pushUpdateState()
+    await downloadUpdateAsset(update)
+  } catch {
+    updateState = { kind: 'idle' }
+    pushUpdateState()
+  }
+}
+
+ipcMain.handle('json:get-update-state', (): UpdateState => updateState)
+
+ipcMain.handle('json:install-update', async (): Promise<void> => {
+  if (updateState.kind !== 'ready') return
+  const dmgPath = join(setUpdatesDir(), `json-reader-${updateState.version}-arm64.dmg`)
+  const opened = await shell.openPath(dmgPath).catch(() => 'failed')
+  if (opened) shell.showItemInFolder(dmgPath)
+})
+
 void app.whenReady().then(() => {
   buildMenu()
   createWindow()
+  void runUpdateCycle()
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()
   })

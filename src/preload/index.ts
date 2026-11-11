@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron'
-import type { JsonReaderApi } from '../shared/types'
+import type { JsonReaderApi, UpdateState } from '../shared/types'
 
 const api: JsonReaderApi = {
   openFolder: () => ipcRenderer.invoke('json:open-folder'),
@@ -20,6 +20,13 @@ const api: JsonReaderApi = {
     const listener = (_: unknown, isFullscreen: boolean): void => callback(isFullscreen)
     ipcRenderer.on('fullscreen-changed', listener)
     return () => ipcRenderer.removeListener('fullscreen-changed', listener)
+  },
+  getUpdateState: () => ipcRenderer.invoke('json:get-update-state'),
+  installUpdate: () => ipcRenderer.invoke('json:install-update'),
+  onUpdateStateChanged: (callback: (state: UpdateState) => void) => {
+    const listener = (_: unknown, state: UpdateState): void => callback(state)
+    ipcRenderer.on('update-state-changed', listener)
+    return () => ipcRenderer.removeListener('update-state-changed', listener)
   },
   getVersion: () => ipcRenderer.invoke('json:get-version')
 }
