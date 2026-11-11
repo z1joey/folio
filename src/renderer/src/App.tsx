@@ -427,7 +427,7 @@ export default function App(): React.ReactElement {
 
   const fileName = fileNameOf(state)
   useEffect(() => {
-    document.title = fileName ? `${fileName} — JSON Reader` : 'JSON Reader'
+    document.title = fileName ? `${fileName} — Folio` : 'Folio'
   }, [fileName])
 
   // The folder index of the file on screen (null in single-file mode) — the
