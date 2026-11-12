@@ -14,6 +14,7 @@ const { appMock, browserWindowMock, dialogMock, ipcMainMock, menuMock } = vi.hoi
     whenReady: vi.fn(() => Promise.resolve()),
     on: vi.fn(),
     quit: vi.fn(),
+    isReady: vi.fn(() => true),
     getPath: vi.fn(() => join(dir, 'userdata'))
   },
   // A `function` implementation so `new BrowserWindow(...)` works and
@@ -223,6 +224,27 @@ describe('window setup', () => {
     // Consumed once: it does not re-open on the next mount.
     const second = await consume()
     expect(second).toBeNull()
+  })
+
+  it('recreates the window when a file is handed over while the app has none', async () => {
+    const folder = await folderFixture('open-file-windowless', { 'late.json': '[7]' })
+    // The only window was closed (⌘W) while the app keeps running: macOS
+    // hands the file over as a bare open-document event with no reopen, so
+    // the delivery must bring a window back — nothing else will.
+    const win = browserWindowMock.mock.results[0]?.value as { on: ReturnType<typeof vi.fn> }
+    const closed = win.on.mock.calls.find(([evt]) => evt === 'closed')?.[1] as () => void
+    closed()
+    expect(browserWindowMock.mock.calls).toHaveLength(1)
+    const registered = appMock.on.mock.calls.filter(([evt]) => evt === 'open-file')
+    const entry = registered[registered.length - 1] as [string, (event: { preventDefault(): void }, path: string) => void]
+    entry[1]({ preventDefault: vi.fn() }, join(folder, 'late.json'))
+    // A second window is created for the delivery, and the result lands there.
+    await vi.waitFor(() => expect(browserWindowMock.mock.calls).toHaveLength(2))
+    const second = browserWindowMock.mock.results[1]?.value as { webContents: { send: ReturnType<typeof vi.fn> } }
+    await vi.waitFor(() => {
+      const opened = second.webContents.send.mock.calls.find(([channel]) => channel === 'file-opened')
+      expect(opened?.[1]).toMatchObject({ status: 'ok', fileName: 'late.json', root: { type: 'array', count: 1 } })
+    })
   })
 })
 

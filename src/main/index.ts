@@ -314,9 +314,20 @@ function openedFilesFolderFor(fileName: string, files: string[]): OpenedFilesFol
 
 function deliverQueuedOpen(): void {
   const path = queuedOpenPath
-  if (!path || !mainWindow) {
-    if (process.env.JSON_READER_DEBUG) console.log('[open-file] queued but no window yet:', path)
+  if (!path) {
+    if (process.env.JSON_READER_DEBUG) console.log('[open-file] nothing queued')
     return
+  }
+  if (!mainWindow) {
+    // A file can arrive while the app runs but has no window (the window
+    // was closed with ⌘W): macOS sends a bare open-document event and no
+    // reopen, so the activate handler never runs and nothing else would
+    // recreate the window. Create one here and deliver — the freshly
+    // mounted renderer pulls the result through consume-file-opened, so
+    // delivering before its load completes is safe.
+    if (!app.isReady()) return // pre-ready: whenReady delivers after createWindow()
+    if (process.env.JSON_READER_DEBUG) console.log('[open-file] windowless; creating one for:', path)
+    createWindow()
   }
   queuedOpenPath = null
   void openJsonFile(path).then((result) => {

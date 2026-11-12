@@ -430,22 +430,25 @@ export default function App(): React.ReactElement {
     return () => window.removeEventListener('keydown', onKey)
   }, [folder, pickFolder])
 
-  // Fetch the current item; a stale reply for an older index is discarded.
+  // Fetch the current item; a stale reply for an older file or index is
+  // discarded. The file name is part of the identity: opening another
+  // array file that happens to start at the same index must re-fetch.
   const arrayIndex = state.view === 'array' ? state.index : -1
+  const arrayFile = state.view === 'array' ? state.fileName : null
   useEffect(() => {
-    if (arrayIndex < 0) return
+    if (arrayIndex < 0 || arrayFile === null) return
     let alive = true
     jsonReader.getItem(arrayIndex).then((result) => {
       if (!alive) return
       setState((prev) => {
-        if (prev.view !== 'array' || prev.index !== arrayIndex) return prev
+        if (prev.view !== 'array' || prev.index !== arrayIndex || prev.fileName !== arrayFile) return prev
         return { ...prev, item: result.status === 'ok' ? { value: result.value } : { error: result.error } }
       })
     })
     return () => {
       alive = false
     }
-  }, [arrayIndex])
+  }, [arrayIndex, arrayFile])
 
   const fileName = fileNameOf(state)
   useEffect(() => {
@@ -498,16 +501,20 @@ export default function App(): React.ReactElement {
               )}
               {fileName && (
                 <>
-                  <button
-                    type="button"
-                    className="icon-button"
-                    aria-pressed={expandAll}
-                    aria-label={expandAll ? 'Collapse all sections' : 'Expand all sections'}
-                    title={expandAll ? 'Collapse all sections' : 'Expand all sections'}
-                    onClick={() => setExpandAll((open) => !open)}
-                  >
-                    <ExpandAllIcon up={expandAll} />
-                  </button>
+                  {/* Expand/collapse shapes a JSON tree; markdown has no
+                      tree to fold, so its header only keeps fullscreen. */}
+                  {state.view !== 'markdown' && (
+                    <button
+                      type="button"
+                      className="icon-button"
+                      aria-pressed={expandAll}
+                      aria-label={expandAll ? 'Collapse all sections' : 'Expand all sections'}
+                      title={expandAll ? 'Collapse all sections' : 'Expand all sections'}
+                      onClick={() => setExpandAll((open) => !open)}
+                    >
+                      <ExpandAllIcon up={expandAll} />
+                    </button>
+                  )}
                   <button
                     type="button"
                     className="icon-button"
