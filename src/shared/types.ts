@@ -6,10 +6,14 @@ export type { JsonPath } from './annotationPath'
 
 /**
  * The root shape of an opened file: a JSON array (read item by item), any
- * other JSON value, or a markdown file's full text (rendered, not JSON at
- * all).
+ * other JSON value, a markdown file's full text (rendered, not JSON at
+ * all), or an image file as a data url (rendered, not JSON at all).
  */
-export type RootInfo = { type: 'array'; count: number } | { type: 'value'; value: unknown } | { type: 'markdown'; text: string }
+export type RootInfo =
+  | { type: 'array'; count: number }
+  | { type: 'value'; value: unknown }
+  | { type: 'markdown'; text: string }
+  | { type: 'image'; dataUrl: string }
 
 export type OpenResponse =
   | { status: 'canceled' }

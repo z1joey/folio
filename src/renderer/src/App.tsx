@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { Annotation, AnnotationRange, JsonPath, OpenFileResponse, OpenResponse, RecentFolder, RootInfo, SearchHit, UpdateState } from '../../shared/types'
+import { isOpenableFileName } from '../../shared/fileTypes'
 import { jsonReader } from './ipc'
 import { annotationsForItem, decideAnnotationToggle, decideRangeToggle, isAnnotated } from './annotations'
 import type { AnnotationView } from './JsonView'
@@ -17,6 +18,7 @@ type State =
   | { view: 'array'; fileName: string; count: number; index: number; item: ItemState }
   | { view: 'value'; fileName: string; value: unknown }
   | { view: 'markdown'; fileName: string; text: string }
+  | { view: 'image'; fileName: string; dataUrl: string }
   | {
       view: 'error'
       fileName: string
@@ -178,6 +180,8 @@ export default function App(): React.ReactElement {
         })
       } else if (root.type === 'markdown') {
         setState({ view: 'markdown', fileName, text: root.text })
+      } else if (root.type === 'image') {
+        setState({ view: 'image', fileName, dataUrl: root.dataUrl })
       } else {
         setState({ view: 'value', fileName, value: root.value })
       }
@@ -467,7 +471,7 @@ export default function App(): React.ReactElement {
       if (!hasFiles(event)) return
       event.preventDefault()
       const paths = Array.from(event.dataTransfer.files)
-        .filter((file) => /\.(json|md)$/i.test(file.name))
+        .filter((file) => isOpenableFileName(file.name))
         .map((file) => window.jsonReader.pathForFile(file))
         .filter((path) => path.length > 0)
       if (paths.length === 0) return
@@ -647,6 +651,9 @@ export default function App(): React.ReactElement {
               <MarkdownView key={`${folder?.name ?? 'file'}:${state.fileName}`} text={state.text} />
             </div>
           )}
+          {state.view === 'image' && (
+            <ImageView fileName={state.fileName} dataUrl={state.dataUrl} />
+          )}
           {state.view === 'array' &&
             (state.count === 0 ? (
               <div className="center-state">
@@ -718,6 +725,18 @@ function ItemBody({
  * one keystroke away from the raw source. No annotations, no pager — it
  * is not JSON.
  */
+/**
+ * An image file opened from the sidebar or a drag: centered, contained by
+ * the window, at its natural aspect ratio.
+ */
+function ImageView({ fileName, dataUrl }: { fileName: string; dataUrl: string }): React.ReactElement {
+  return (
+    <div className="image-view">
+      <img src={dataUrl} alt={fileName} className="image-view-img" />
+    </div>
+  )
+}
+
 function MarkdownView({ text }: { text: string }): React.ReactElement {
   const [preview, setPreview] = useState(true)
   return (

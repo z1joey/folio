@@ -3,8 +3,9 @@ import { createWriteStream } from 'node:fs'
 import { mkdir, readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { lookup } from 'node:dns/promises'
 import type { Readable } from 'node:stream'
-import { basename, join } from 'node:path'
+import { basename, extname, join } from 'node:path'
 import { JsonFile, JsonError, searchText } from './jsonFile'
+import { isOpenableFileName, isImageFile, mimeForExt } from '../shared/fileTypes'
 import { parseRecentFolders, withRecentFolder, type RecentFolder } from './recentFolders'
 import { parseLatestRelease, requestValidated, type ParsedUpdate } from './updater'
 import {
@@ -54,6 +55,9 @@ const FOLDER_SEARCH_LIMIT = 10
 /** Markdown previews read whole files; anything past this is refused. */
 const MAX_MARKDOWN_BYTES = 5 * 1024 * 1024
 
+/** Images preview as data urls; anything past this is refused. */
+const MAX_IMAGE_BYTES = 30 * 1024 * 1024
+
 /**
  * True for loopback, private, link-local and other reserved addresses —
  * the DNS answer a public hostname must never produce before the shell
@@ -97,6 +101,10 @@ async function clearFolderSearchCache(): Promise<void> {
 }
 
 function createWindow(): void {
+  if (process.env.JSON_READER_DEBUG) {
+    console.log('[window] createWindow called; isReady =', app.isReady())
+    console.log(new Error('creation site').stack?.split('\n').slice(0, 5).join('\n'))
+  }
   // darwin-only chrome tuning: hiddenInset hides the native bar and the
   // traffic-light position lines them up with the header tools row
   // (52px header, 28px buttons → row center 26px; 12px lights → top 20px).
@@ -192,11 +200,32 @@ async function readMarkdownFile(path: string): Promise<string> {
   return readFile(path, 'utf8')
 }
 
+/**
+ * Reads an image file as a data url — the renderer's CSP blocks
+ * file-scheme sources, but `data:` images are already allowed.
+ */
+async function readImageFile(path: string): Promise<string> {
+  const info = await stat(path)
+  if (info.size > MAX_IMAGE_BYTES) {
+    throw new JsonError('This image is too large to preview.')
+  }
+  const buffer = await readFile(path)
+  const ext = extname(path).slice(1)
+  return `data:image/${mimeForExt(ext)};base64,${buffer.toString('base64')}`
+}
+
 /** Opens `path` as the current file, replacing whatever was open before. */
 async function openJsonFile(path: string): Promise<OpenFileResponse> {
   const fileName = basename(path)
   currentFilePath = path
   try {
+    // Images travel as data urls — no JSON scan, no annotations.
+    if (isImageFile(fileName)) {
+      const dataUrl = await readImageFile(path)
+      currentFile = null
+      currentFileName = fileName
+      return { status: 'ok', fileName, root: { type: 'image', dataUrl } }
+    }
     // Markdown files read as plain text — no JSON scan, no annotations.
     if (/\.md$/i.test(fileName)) {
       const text = await readMarkdownFile(path)
@@ -241,7 +270,7 @@ async function openFolderPath(path: string): Promise<OpenResponse> {
   try {
     const entries = await readdir(path, { withFileTypes: true })
     names = entries
-      .filter((entry) => entry.isFile() && !entry.name.startsWith('.') && /\.(json|md)$/i.test(entry.name))
+      .filter((entry) => entry.isFile() && !entry.name.startsWith('.') && isOpenableFileName(entry.name))
       .map((entry) => entry.name)
       .sort(compareFileWithSidecars)
   } catch {
@@ -357,7 +386,9 @@ function deliverQueuedOpen(): void {
 
 app.on('open-file', (event, filePath) => {
   event.preventDefault()
-  if (process.env.JSON_READER_DEBUG) console.log('[open-file] event received:', filePath)
+  if (process.env.JSON_READER_DEBUG) {
+    console.log('[open-file] event received:', filePath, '; mainWindow =', mainWindow !== null, '; isReady =', app.isReady())
+  }
   queuedOpenPath = filePath
   deliverQueuedOpen()
 })
@@ -871,7 +902,7 @@ ipcMain.handle('json:get-update-state', (): UpdateState => updateState)
  * Paths that are not json/md are skipped.
  */
 ipcMain.handle('json:open-dropped-files', async (_event, paths: unknown): Promise<OpenFileResponse> => {
-  const list = Array.isArray(paths) ? paths.filter((p): p is string => typeof p === 'string' && /\.(json|md)$/i.test(p)) : []
+  const list = Array.isArray(paths) ? paths.filter((p): p is string => typeof p === 'string' && isOpenableFileName(basename(p))) : []
   if (list.length === 0) {
     return { status: 'error', fileName: '', error: 'Only .json and .md files can be opened.' }
   }
