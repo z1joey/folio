@@ -536,6 +536,31 @@ export default function App(): React.ReactElement {
 
   return (
     <div className={`app${zen ? ' zen' : ''}${osFullscreen ? ' os-fullscreen' : ''}`} onDragOver={onDragOver} onDrop={onDrop}>
+      {(state.view === 'markdown' || state.view === 'image') && (
+        <div className="content-tools">
+          {state.view === 'markdown' && (
+            <button
+              type="button"
+              className="jv-md-toggle"
+              aria-pressed={mdSource}
+              onClick={() => setMdSource((on) => !on)}
+            >
+              {mdSource ? 'Preview' : 'Source'}
+            </button>
+          )}
+          {state.view === 'image' && (
+            <>
+              <button type="button" className="zoom-button" aria-label="Zoom out" onClick={() => setImageZoom((z) => Math.max(10, z - 25))}>
+                −
+              </button>
+              <span className="zoom-value">{imageZoom}%</span>
+              <button type="button" className="zoom-button" aria-label="Zoom in" onClick={() => setImageZoom((z) => Math.min(400, z + 25))}>
+                +
+              </button>
+            </>
+          )}
+        </div>
+      )}
       {!zen && (
         <header className="header">
           {(folder || fileName) && (
@@ -587,31 +612,6 @@ export default function App(): React.ReactElement {
               inputRef={searchInputRef}
               onSelect={handleSearchSelect}
             />
-          )}
-          {(state.view === 'markdown' || state.view === 'image') && (
-            <div className="content-tools">
-              {state.view === 'markdown' && (
-                <button
-                  type="button"
-                  className="jv-md-toggle"
-                  aria-pressed={mdSource}
-                  onClick={() => setMdSource((on) => !on)}
-                >
-                  {mdSource ? 'Preview' : 'Source'}
-                </button>
-              )}
-              {state.view === 'image' && (
-                <>
-                  <button type="button" className="zoom-button" aria-label="Zoom out" onClick={() => setImageZoom((z) => Math.max(10, z - 25))}>
-                    −
-                  </button>
-                  <span className="zoom-value">{imageZoom}%</span>
-                  <button type="button" className="zoom-button" aria-label="Zoom in" onClick={() => setImageZoom((z) => Math.min(400, z + 25))}>
-                    +
-                  </button>
-                </>
-              )}
-            </div>
           )}
           {updateState.kind === 'ready' ? (
       <button

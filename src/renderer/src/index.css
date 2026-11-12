@@ -93,14 +93,15 @@ body {
    toggle, image zoom controls — the version chip stays pinned after
    them. */
 .content-tools {
-  margin-left: auto;
+  position: fixed;
+  /* Just below the header (52px), right edge aligned with the version
+     chip's 16px window margin. */
+  top: 60px;
+  right: 16px;
+  z-index: 20;
   display: flex;
   align-items: center;
   gap: 8px;
-}
-
-.content-tools ~ .app-version {
-  margin-left: 12px;
 }
 
 .zoom-button {
