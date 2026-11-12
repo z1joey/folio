@@ -84,6 +84,7 @@ function fileNameOf(state: State): string | null {
     state.view === 'array' ||
     state.view === 'value' ||
     state.view === 'markdown' ||
+    state.view === 'image' ||
     state.view === 'error'
   ) {
     return state.fileName
@@ -117,6 +118,10 @@ export default function App(): React.ReactElement {
   // disk, the header swaps the version number for an Update button — one
   // slot, one element at a time.
   const [updateState, setUpdateState] = useState<UpdateState>({ kind: 'idle' })
+  // Content-specific tools for the header's right slot: the markdown
+  // source toggle and the image zoom percentage.
+  const [mdSource, setMdSource] = useState(false)
+  const [imageZoom, setImageZoom] = useState(100)
   useEffect(() => {
     void jsonReader.getUpdateState().then(setUpdateState).catch(() => {})
     return jsonReader.onUpdateStateChanged(setUpdateState)
@@ -459,6 +464,13 @@ export default function App(): React.ReactElement {
     document.title = fileName ? `${fileName} — Folio` : 'Folio'
   }, [fileName])
 
+  // Content tools reset with the file: markdown starts in preview, the
+  // image zoom returns to actual size.
+  useEffect(() => {
+    setMdSource(false)
+    setImageZoom(100)
+  }, [fileName])
+
   // Dragging .json/.md files onto the window behaves exactly like
   // double-clicking them in Finder: each one opens, accumulates into the
   // session's opened-files list, and the last dropped file is shown.
@@ -576,6 +588,31 @@ export default function App(): React.ReactElement {
               onSelect={handleSearchSelect}
             />
           )}
+          {(state.view === 'markdown' || state.view === 'image') && (
+            <div className="content-tools">
+              {state.view === 'markdown' && (
+                <button
+                  type="button"
+                  className="jv-md-toggle"
+                  aria-pressed={mdSource}
+                  onClick={() => setMdSource((on) => !on)}
+                >
+                  {mdSource ? 'Preview' : 'Source'}
+                </button>
+              )}
+              {state.view === 'image' && (
+                <>
+                  <button type="button" className="zoom-button" aria-label="Zoom out" onClick={() => setImageZoom((z) => Math.max(10, z - 25))}>
+                    −
+                  </button>
+                  <span className="zoom-value">{imageZoom}%</span>
+                  <button type="button" className="zoom-button" aria-label="Zoom in" onClick={() => setImageZoom((z) => Math.min(400, z + 25))}>
+                    +
+                  </button>
+                </>
+              )}
+            </div>
+          )}
           {updateState.kind === 'ready' ? (
       <button
         type="button"
@@ -648,11 +685,11 @@ export default function App(): React.ReactElement {
           {state.view === 'markdown' && (
             <div className="doc">
               {/* Keyed like the value view: a fresh toggle state per file. */}
-              <MarkdownView key={`${folder?.name ?? 'file'}:${state.fileName}`} text={state.text} />
+              <MarkdownView key={`${folder?.name ?? 'file'}:${state.fileName}`} text={state.text} source={mdSource} />
             </div>
           )}
           {state.view === 'image' && (
-            <ImageView fileName={state.fileName} dataUrl={state.dataUrl} />
+            <ImageView fileName={state.fileName} dataUrl={state.dataUrl} zoom={imageZoom} />
           )}
           {state.view === 'array' &&
             (state.count === 0 ? (
@@ -729,30 +766,35 @@ function ItemBody({
  * An image file opened from the sidebar or a drag: centered, contained by
  * the window, at its natural aspect ratio.
  */
-function ImageView({ fileName, dataUrl }: { fileName: string; dataUrl: string }): React.ReactElement {
+function ImageView({
+  fileName,
+  dataUrl,
+  zoom
+}: {
+  fileName: string
+  dataUrl: string
+  zoom: number
+}): React.ReactElement {
+  // Actual-pixel sizing scaled by the zoom percent; the container scrolls
+  // when the zoomed image outgrows the window.
+  const [natural, setNatural] = useState<{ w: number; h: number } | null>(null)
+  const width = natural ? Math.round((natural.w * zoom) / 100) : undefined
   return (
     <div className="image-view">
-      <img src={dataUrl} alt={fileName} className="image-view-img" />
+      <img
+        src={dataUrl}
+        alt={fileName}
+        className="image-view-img"
+        style={width ? { width } : undefined}
+        onLoad={(event) => setNatural({ w: event.currentTarget.naturalWidth, h: event.currentTarget.naturalHeight })}
+      />
     </div>
   )
 }
 
-function MarkdownView({ text }: { text: string }): React.ReactElement {
-  const [preview, setPreview] = useState(true)
-  return (
-    <>
-      <div className="md-toolbar">
-        <button type="button" className={`jv-md-toggle${preview ? ' on' : ''}`} aria-pressed={preview} onClick={() => setPreview((on) => !on)}>
-          {preview ? 'Source' : 'Preview'}
-        </button>
-      </div>
-      {preview ? (
-        <MarkdownBlock text={text} wrapped />
-      ) : (
-        <pre className="md-source">{text}</pre>
-      )}
-    </>
-  )
+function MarkdownView({ text, source }: { text: string; source: boolean }): React.ReactElement {
+  if (source) return <pre className="md-source">{text}</pre>
+  return <MarkdownBlock text={text} wrapped />
 }
 
 function EmptyState({
