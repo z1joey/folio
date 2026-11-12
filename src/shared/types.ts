@@ -17,8 +17,14 @@ export type OpenResponse =
   | { status: 'folder'; folderName: string; files: string[] }
   | { status: 'error'; fileName: string; error: string; annotatable?: boolean }
 
+/**
+ * The temporary sidebar context for files handed over by macOS: present
+ * once two or more handoff opens have accumulated in this session.
+ */
+export type OpenedFilesFolder = { name: string; files: string[]; index: number }
+
 export type OpenFileResponse =
-  | { status: 'ok'; fileName: string; root: RootInfo }
+  | { status: 'ok'; fileName: string; root: RootInfo; folder?: OpenedFilesFolder }
   | { status: 'error'; fileName: string; error: string; annotatable?: boolean }
 
 export type ItemResponse = { status: 'ok'; value: unknown } | { status: 'error'; error: string }

@@ -227,8 +227,11 @@ export default function App(): React.ReactElement {
     (result: OpenFileResponse) => {
       pendingFolderIndexRef.current = null
       if (result.status === 'ok') {
-        setFolder(null)
-        applyOpenedFile(result.fileName, result.root, null)
+        // From the second handoff open on, the result carries a temporary
+        // folder and the sidebar lists every file opened this way.
+        const { folder } = result
+        setFolder(folder ? { name: folder.name, files: folder.files, activeIndex: folder.index } : null)
+        applyOpenedFile(result.fileName, result.root, folder ? folder.index : null)
         return
       }
       setFolder(null)

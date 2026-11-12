@@ -30,6 +30,7 @@ import type {
   AnnotationsResponse,
   ItemResponse,
   JsonPath,
+  OpenedFilesFolder,
   OpenFileResponse,
   OpenResponse,
   SearchHit,
@@ -262,6 +263,9 @@ async function openFolderPath(path: string): Promise<OpenResponse> {
   }
   // A successful open puts the folder at the front of the recents.
   await recordRecentFolder(path)
+  // A real folder ends the opened-files accumulation: the sidebar now
+  // belongs to this folder's files.
+  handoffFiles.length = 0
   // A single JSON file behaves like a plain file open: no folder panel.
   if (names.length === 1) {
     await clearFolderSearchCache()
@@ -289,6 +293,25 @@ async function showAndOpenFolder(win: BrowserWindow): Promise<OpenResponse> {
    paths arriving before the window exists wait in queue. */
 let lastFileOpened: OpenFileResponse | null = null
 
+/* Files opened through this session's handoffs, in first-open order. From
+   the second one on they form a temporary folder — the sidebar lists them
+   so earlier opens stay reachable. Opening a real folder ends the
+   accumulation: the sidebar belongs to that folder's files. */
+let handoffFiles: string[] = []
+
+const OPENED_FILES_FOLDER_NAME = 'Opened files'
+
+/** The temporary-folder payload for a handoff result, once two or more
+    files have accumulated; single-file mode carries no folder. */
+function openedFilesFolderFor(fileName: string, files: string[]): OpenedFilesFolder | undefined {
+  if (files.length < 2) return undefined
+  return {
+    name: OPENED_FILES_FOLDER_NAME,
+    files: files.map((p) => basename(p)),
+    index: files.findIndex((p) => basename(p) === fileName)
+  }
+}
+
 function deliverQueuedOpen(): void {
   const path = queuedOpenPath
   if (!path || !mainWindow) {
@@ -297,13 +320,25 @@ function deliverQueuedOpen(): void {
   }
   queuedOpenPath = null
   void openJsonFile(path).then((result) => {
+    let pushed: OpenFileResponse = result
+    if (result.status === 'ok') {
+      // Accumulate this session's handoff opens; a repeat open keeps its
+      // original position. Two or more turn into the temporary folder and
+      // take over the sidebar until a real folder is opened again.
+      if (!handoffFiles.includes(path)) handoffFiles.push(path)
+      if (handoffFiles.length >= 2) currentFolderFiles = [...handoffFiles]
+      pushed = { ...result, folder: openedFilesFolderFor(result.fileName, handoffFiles) }
+    }
     // The live push only lands if the renderer already mounted its
     // listener — a file opened at cold launch races that mount, so the
     // result also stays consumable: a freshly mounted renderer pulls it
     // (and clears it) on start.
-    lastFileOpened = result
-    if (process.env.JSON_READER_DEBUG) console.log('[open-file] opened, pushing:', result.fileName, result.status)
-    mainWindow?.webContents.send('file-opened', result)
+    lastFileOpened = pushed
+    if (process.env.JSON_READER_DEBUG) {
+      const folder = pushed.status === 'ok' ? pushed.folder : undefined
+      console.log('[open-file] opened, pushing:', pushed.fileName, pushed.status, folder ? `(folder of ${folder.files.length})` : '')
+    }
+    mainWindow?.webContents.send('file-opened', pushed)
   })
 }
 

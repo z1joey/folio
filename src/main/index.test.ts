@@ -143,6 +143,64 @@ describe('window setup', () => {
     })
   })
 
+  it('accumulates handoff opens into a temporary folder from the second file on', async () => {
+    const win = browserWindowMock.mock.results[0]?.value as { webContents: { send: ReturnType<typeof vi.fn> } }
+    const folderA = await folderFixture('handoff-a', { 'a.json': '[1]' })
+    const folderB = await folderFixture('handoff-b', { 'b.md': '# B' })
+    const registered = appMock.on.mock.calls.filter(([evt]) => evt === 'open-file')
+    const entry = registered[registered.length - 1] as [string, (event: { preventDefault(): void }, path: string) => void]
+
+    const handoff = async (path: string): Promise<OpenFileResponse> => {
+      // Snapshot before dispatch: earlier pushes exist, so waiting for the
+      // count to grow is the only way to grab THIS open's response.
+      const before = win.webContents.send.mock.calls.filter(([channel]) => channel === 'file-opened').length
+      entry[1]({ preventDefault: vi.fn() }, path)
+      let pushed: OpenFileResponse | undefined
+      await vi.waitFor(() => {
+        const calls = win.webContents.send.mock.calls.filter(([channel]) => channel === 'file-opened')
+        expect(calls.length).toBeGreaterThan(before)
+        pushed = calls[calls.length - 1]?.[1] as OpenFileResponse
+      })
+      return pushed as OpenFileResponse
+    }
+
+    // A real folder open resets the accumulation, so this test is
+    // order-independent no matter what earlier tests handed over.
+    const resetter = await folderFixture('handoff-reset', { 'r.json': '[1]', 's.json': '[2]' })
+    pick(resetter)
+    await openFolder()
+
+    // First handoff open: single-file mode, no folder.
+    const first = await handoff(join(folderA, 'a.json'))
+    expect(first.status).toBe('ok')
+    if (first.status !== 'ok') return
+    expect(first.folder).toBeUndefined()
+
+    // Second handoff open: the temporary folder appears and carries both
+    // files, pointing at the file just opened.
+    const second = await handoff(join(folderB, 'b.md'))
+    if (second.status !== 'ok') return
+    expect(second.folder).toEqual({ name: 'Opened files', files: ['a.json', 'b.md'], index: 1 })
+
+    // Sidebar clicks resolve against the temporary folder's files.
+    await expect(openFile(0)).resolves.toMatchObject({ status: 'ok', fileName: 'a.json' })
+    await expect(openFile(1)).resolves.toMatchObject({ status: 'ok', fileName: 'b.md' })
+
+    // Re-opening an accumulated file keeps its original position.
+    const repeat = await handoff(join(folderA, 'a.json'))
+    if (repeat.status !== 'ok') return
+    expect(repeat.folder).toEqual({ name: 'Opened files', files: ['a.json', 'b.md'], index: 0 })
+
+    // Opening a real folder ends the accumulation: the next handoff is
+    // single-file again.
+    const real = await folderFixture('handoff-real', { 'r.json': '[1]', 's.json': '[2]' })
+    pick(real)
+    await openFolder()
+    const afterReal = await handoff(join(folderA, 'a.json'))
+    if (afterReal.status !== 'ok') return
+    expect(afterReal.folder).toBeUndefined()
+  })
+
   it('keeps the last file-open result consumable for a renderer that mounts late', async () => {
     const folder = await folderFixture('open-file-race', { 'later.md': '# Race winner' })
     const registered = appMock.on.mock.calls.filter(([evt]) => evt === 'open-file')
