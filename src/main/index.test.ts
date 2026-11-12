@@ -14,7 +14,7 @@ const { appMock, browserWindowMock, dialogMock, ipcMainMock, menuMock } = vi.hoi
     whenReady: vi.fn(() => Promise.resolve()),
     on: vi.fn(),
     quit: vi.fn(),
-    isReady: true,
+    isReady: vi.fn(() => true),
     getPath: vi.fn(() => join(dir, 'userdata'))
   },
   // A `function` implementation so `new BrowserWindow(...)` works and

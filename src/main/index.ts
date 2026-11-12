@@ -302,7 +302,7 @@ function deliverQueuedOpen(): void {
     // recreate the window. Create one here and deliver — the freshly
     // mounted renderer pulls the result through consume-file-opened, so
     // delivering before its load completes is safe.
-    if (!app.isReady) return // pre-ready: whenReady delivers after createWindow()
+    if (!app.isReady()) return // pre-ready: whenReady delivers after createWindow()
     if (process.env.JSON_READER_DEBUG) console.log('[open-file] windowless; creating one for:', path)
     createWindow()
   }
