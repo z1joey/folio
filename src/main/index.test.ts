@@ -226,6 +226,39 @@ describe('window setup', () => {
     expect(second).toBeNull()
   })
 
+  it('opens dropped files, accumulating them like handoffs', async () => {
+    const folder = await folderFixture('dropped-files', { 'one.json': '[1]', 'two.md': '# Two', 'skip.txt': 'nope' })
+    const openDropped = (paths: unknown): Promise<OpenFileResponse> =>
+      handlers.get('json:open-dropped-files')!(undefined, paths) as Promise<OpenFileResponse>
+
+    // A real folder open resets the accumulation: this test is
+    // order-independent regardless of earlier handoffs.
+    const resetter = await folderFixture('dropped-reset', { 'r.json': '[1]', 's.json': '[2]' })
+    pick(resetter)
+    await openFolder()
+
+    // A json and a markdown file dropped together: both open, the last
+    // one's result comes back carrying the accumulated folder.
+    const result = await openDropped([join(folder, 'one.json'), join(folder, 'two.md')])
+    expect(result.status).toBe('ok')
+    if (result.status !== 'ok') return
+    expect(result.fileName).toBe('two.md')
+    expect(result.folder).toEqual({ name: 'Opened files', files: ['one.json', 'two.md'], index: 1 })
+
+    // Sidebar clicks resolve against the dropped files.
+    await expect(openFile(0)).resolves.toMatchObject({ status: 'ok', fileName: 'one.json' })
+
+    // Non-openable extensions are refused without side effects.
+    await expect(openDropped([join(folder, 'skip.txt')])).resolves.toMatchObject({
+      status: 'error',
+      error: 'Only .json and .md files can be opened.'
+    })
+    await expect(openDropped('not an array')).resolves.toMatchObject({
+      status: 'error',
+      error: 'Only .json and .md files can be opened.'
+    })
+  })
+
   it('recreates the window when a file is handed over while the app has none', async () => {
     const folder = await folderFixture('open-file-windowless', { 'late.json': '[7]' })
     // The only window was closed (⌘W) while the app keeps running: macOS

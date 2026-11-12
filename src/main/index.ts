@@ -312,6 +312,16 @@ function openedFilesFolderFor(fileName: string, files: string[]): OpenedFilesFol
   }
 }
 
+/** Records a successfully opened handoff/dropped file into the session's
+    accumulation; two or more take over the sidebar until a real folder
+    opens. Returns the response with the temporary folder attached. */
+function noteOpenedFile(path: string, result: OpenFileResponse): OpenFileResponse {
+  if (result.status !== 'ok') return result
+  if (!handoffFiles.includes(path)) handoffFiles.push(path)
+  if (handoffFiles.length >= 2) currentFolderFiles = [...handoffFiles]
+  return { ...result, folder: openedFilesFolderFor(result.fileName, handoffFiles) }
+}
+
 function deliverQueuedOpen(): void {
   const path = queuedOpenPath
   if (!path) {
@@ -331,24 +341,16 @@ function deliverQueuedOpen(): void {
   }
   queuedOpenPath = null
   void openJsonFile(path).then((result) => {
-    let pushed: OpenFileResponse = result
-    if (result.status === 'ok') {
-      // Accumulate this session's handoff opens; a repeat open keeps its
-      // original position. Two or more turn into the temporary folder and
-      // take over the sidebar until a real folder is opened again.
-      if (!handoffFiles.includes(path)) handoffFiles.push(path)
-      if (handoffFiles.length >= 2) currentFolderFiles = [...handoffFiles]
-      pushed = { ...result, folder: openedFilesFolderFor(result.fileName, handoffFiles) }
-    }
     // The live push only lands if the renderer already mounted its
     // listener — a file opened at cold launch races that mount, so the
     // result also stays consumable: a freshly mounted renderer pulls it
     // (and clears it) on start.
-    lastFileOpened = pushed
+    const pushed = noteOpenedFile(path, result)
     if (process.env.JSON_READER_DEBUG) {
       const folder = pushed.status === 'ok' ? pushed.folder : undefined
       console.log('[open-file] opened, pushing:', pushed.fileName, pushed.status, folder ? `(folder of ${folder.files.length})` : '')
     }
+    lastFileOpened = pushed
     mainWindow?.webContents.send('file-opened', pushed)
   })
 }
@@ -861,6 +863,24 @@ async function runUpdateCycle(): Promise<void> {
 }
 
 ipcMain.handle('json:get-update-state', (): UpdateState => updateState)
+
+/**
+ * Opens files dropped onto the window exactly as if they had been handed
+ * over by macOS: each one is opened and accumulated, the sidebar keeps
+ * them reachable, and the last file's result is what the renderer shows.
+ * Paths that are not json/md are skipped.
+ */
+ipcMain.handle('json:open-dropped-files', async (_event, paths: unknown): Promise<OpenFileResponse> => {
+  const list = Array.isArray(paths) ? paths.filter((p): p is string => typeof p === 'string' && /\.(json|md)$/i.test(p)) : []
+  if (list.length === 0) {
+    return { status: 'error', fileName: '', error: 'Only .json and .md files can be opened.' }
+  }
+  let result: OpenFileResponse = { status: 'error', fileName: '', error: 'No file could be opened.' }
+  for (const path of list) {
+    result = noteOpenedFile(path, await openJsonFile(path))
+  }
+  return result
+})
 
 /**
  * The renderer pulls the latest file-open result on mount — the cold

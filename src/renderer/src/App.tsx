@@ -455,6 +455,43 @@ export default function App(): React.ReactElement {
     document.title = fileName ? `${fileName} — Folio` : 'Folio'
   }, [fileName])
 
+  // Dragging .json/.md files onto the window behaves exactly like
+  // double-clicking them in Finder: each one opens, accumulates into the
+  // session's opened-files list, and the last dropped file is shown.
+  const hasFiles = (event: React.DragEvent): boolean => event.dataTransfer.types.includes('Files')
+  const onDragOver = (event: React.DragEvent): void => {
+    if (hasFiles(event)) event.preventDefault()
+  }
+  const onDrop = useCallback(
+    (event: React.DragEvent) => {
+      if (!hasFiles(event)) return
+      event.preventDefault()
+      const paths = Array.from(event.dataTransfer.files)
+        .filter((file) => /\.(json|md)$/i.test(file.name))
+        .map((file) => window.jsonReader.pathForFile(file))
+        .filter((path) => path.length > 0)
+      if (paths.length === 0) return
+      void jsonReader
+        .openDroppedFiles(paths)
+        .then((result) => {
+          if (result.status === 'ok') {
+            setFolder(result.folder ? { name: result.folder.name, files: result.folder.files, activeIndex: result.folder.index } : null)
+            applyOpenedFile(result.fileName, result.root, result.folder ? result.folder.index : null)
+            return
+          }
+          setFolder(null)
+          setState({
+            view: 'error',
+            fileName: result.fileName,
+            message: result.error,
+            annotate: null
+          })
+        })
+        .catch(() => {})
+    },
+    [applyOpenedFile]
+  )
+
   // The folder index of the file on screen (null in single-file mode) — the
   // identity annotations are filed under.
   const fileIndex = folder ? folder.activeIndex : null
@@ -482,7 +519,7 @@ export default function App(): React.ReactElement {
   const itemError = state.view === 'array' && 'error' in state.item ? state.item.error : ''
 
   return (
-    <div className={`app${zen ? ' zen' : ''}${osFullscreen ? ' os-fullscreen' : ''}`}>
+    <div className={`app${zen ? ' zen' : ''}${osFullscreen ? ' os-fullscreen' : ''}`} onDragOver={onDragOver} onDrop={onDrop}>
       {!zen && (
         <header className="header">
           {(folder || fileName) && (

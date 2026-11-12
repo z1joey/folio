@@ -215,6 +215,13 @@ export interface JsonReaderApi {
   consumeFileOpened: () => Promise<OpenFileResponse | null>
   /** Opens an https link in the system browser; refused urls do nothing. */
   openExternal: (url: string) => Promise<void>
+  /** The absolute path of a dropped File object. */
+  pathForFile: (file: File) => string
+  /**
+   * Opens dropped files (json/md) one by one, accumulating them like
+   * macOS handoffs do; resolves with the last file's open result.
+   */
+  openDroppedFiles: (paths: string[]) => Promise<OpenFileResponse>
   /** The background update check's current state. */
   getUpdateState: () => Promise<UpdateState>
   /** Opens the downloaded installer dmg; resolves once handed to the OS. */
