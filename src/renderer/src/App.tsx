@@ -579,9 +579,10 @@ export default function App(): React.ReactElement {
               )}
               {fileName && (
                 <>
-                  {/* Expand/collapse shapes a JSON tree; markdown has no
-                      tree to fold, so its header only keeps fullscreen. */}
-                  {state.view !== 'markdown' && (
+                  {/* Expand/collapse shapes a JSON tree; markdown and images
+                      have no tree to fold, so their header only keeps
+                      fullscreen. */}
+                  {state.view !== 'markdown' && state.view !== 'image' && (
                     <button
                       type="button"
                       className="icon-button"
