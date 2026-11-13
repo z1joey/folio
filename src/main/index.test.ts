@@ -14,6 +14,7 @@ const { appMock, browserWindowMock, dialogMock, ipcMainMock, menuMock } = vi.hoi
     whenReady: vi.fn(() => Promise.resolve()),
     on: vi.fn(),
     quit: vi.fn(),
+    isReady: vi.fn(() => true),
     getPath: vi.fn(() => join(dir, 'userdata'))
   },
   // A `function` implementation so `new BrowserWindow(...)` works and
@@ -143,6 +144,64 @@ describe('window setup', () => {
     })
   })
 
+  it('accumulates handoff opens into a temporary folder from the second file on', async () => {
+    const win = browserWindowMock.mock.results[0]?.value as { webContents: { send: ReturnType<typeof vi.fn> } }
+    const folderA = await folderFixture('handoff-a', { 'a.json': '[1]' })
+    const folderB = await folderFixture('handoff-b', { 'b.md': '# B' })
+    const registered = appMock.on.mock.calls.filter(([evt]) => evt === 'open-file')
+    const entry = registered[registered.length - 1] as [string, (event: { preventDefault(): void }, path: string) => void]
+
+    const handoff = async (path: string): Promise<OpenFileResponse> => {
+      // Snapshot before dispatch: earlier pushes exist, so waiting for the
+      // count to grow is the only way to grab THIS open's response.
+      const before = win.webContents.send.mock.calls.filter(([channel]) => channel === 'file-opened').length
+      entry[1]({ preventDefault: vi.fn() }, path)
+      let pushed: OpenFileResponse | undefined
+      await vi.waitFor(() => {
+        const calls = win.webContents.send.mock.calls.filter(([channel]) => channel === 'file-opened')
+        expect(calls.length).toBeGreaterThan(before)
+        pushed = calls[calls.length - 1]?.[1] as OpenFileResponse
+      })
+      return pushed as OpenFileResponse
+    }
+
+    // A real folder open resets the accumulation, so this test is
+    // order-independent no matter what earlier tests handed over.
+    const resetter = await folderFixture('handoff-reset', { 'r.json': '[1]', 's.json': '[2]' })
+    pick(resetter)
+    await openFolder()
+
+    // First handoff open: single-file mode, no folder.
+    const first = await handoff(join(folderA, 'a.json'))
+    expect(first.status).toBe('ok')
+    if (first.status !== 'ok') return
+    expect(first.folder).toBeUndefined()
+
+    // Second handoff open: the temporary folder appears and carries both
+    // files, pointing at the file just opened.
+    const second = await handoff(join(folderB, 'b.md'))
+    if (second.status !== 'ok') return
+    expect(second.folder).toEqual({ name: 'Opened files', files: ['a.json', 'b.md'], index: 1 })
+
+    // Sidebar clicks resolve against the temporary folder's files.
+    await expect(openFile(0)).resolves.toMatchObject({ status: 'ok', fileName: 'a.json' })
+    await expect(openFile(1)).resolves.toMatchObject({ status: 'ok', fileName: 'b.md' })
+
+    // Re-opening an accumulated file keeps its original position.
+    const repeat = await handoff(join(folderA, 'a.json'))
+    if (repeat.status !== 'ok') return
+    expect(repeat.folder).toEqual({ name: 'Opened files', files: ['a.json', 'b.md'], index: 0 })
+
+    // Opening a real folder ends the accumulation: the next handoff is
+    // single-file again.
+    const real = await folderFixture('handoff-real', { 'r.json': '[1]', 's.json': '[2]' })
+    pick(real)
+    await openFolder()
+    const afterReal = await handoff(join(folderA, 'a.json'))
+    if (afterReal.status !== 'ok') return
+    expect(afterReal.folder).toBeUndefined()
+  })
+
   it('keeps the last file-open result consumable for a renderer that mounts late', async () => {
     const folder = await folderFixture('open-file-race', { 'later.md': '# Race winner' })
     const registered = appMock.on.mock.calls.filter(([evt]) => evt === 'open-file')
@@ -165,6 +224,60 @@ describe('window setup', () => {
     // Consumed once: it does not re-open on the next mount.
     const second = await consume()
     expect(second).toBeNull()
+  })
+
+  it('opens dropped files, accumulating them like handoffs', async () => {
+    const folder = await folderFixture('dropped-files', { 'one.json': '[1]', 'two.md': '# Two', 'skip.txt': 'nope' })
+    const openDropped = (paths: unknown): Promise<OpenFileResponse> =>
+      handlers.get('json:open-dropped-files')!(undefined, paths) as Promise<OpenFileResponse>
+
+    // A real folder open resets the accumulation: this test is
+    // order-independent regardless of earlier handoffs.
+    const resetter = await folderFixture('dropped-reset', { 'r.json': '[1]', 's.json': '[2]' })
+    pick(resetter)
+    await openFolder()
+
+    // A json and a markdown file dropped together: both open, the last
+    // one's result comes back carrying the accumulated folder.
+    const result = await openDropped([join(folder, 'one.json'), join(folder, 'two.md')])
+    expect(result.status).toBe('ok')
+    if (result.status !== 'ok') return
+    expect(result.fileName).toBe('two.md')
+    expect(result.folder).toEqual({ name: 'Opened files', files: ['one.json', 'two.md'], index: 1 })
+
+    // Sidebar clicks resolve against the dropped files.
+    await expect(openFile(0)).resolves.toMatchObject({ status: 'ok', fileName: 'one.json' })
+
+    // Non-openable extensions are refused without side effects.
+    await expect(openDropped([join(folder, 'skip.txt')])).resolves.toMatchObject({
+      status: 'error',
+      error: 'Only .json and .md files can be opened.'
+    })
+    await expect(openDropped('not an array')).resolves.toMatchObject({
+      status: 'error',
+      error: 'Only .json and .md files can be opened.'
+    })
+  })
+
+  it('recreates the window when a file is handed over while the app has none', async () => {
+    const folder = await folderFixture('open-file-windowless', { 'late.json': '[7]' })
+    // The only window was closed (⌘W) while the app keeps running: macOS
+    // hands the file over as a bare open-document event with no reopen, so
+    // the delivery must bring a window back — nothing else will.
+    const win = browserWindowMock.mock.results[0]?.value as { on: ReturnType<typeof vi.fn> }
+    const closed = win.on.mock.calls.find(([evt]) => evt === 'closed')?.[1] as () => void
+    closed()
+    expect(browserWindowMock.mock.calls).toHaveLength(1)
+    const registered = appMock.on.mock.calls.filter(([evt]) => evt === 'open-file')
+    const entry = registered[registered.length - 1] as [string, (event: { preventDefault(): void }, path: string) => void]
+    entry[1]({ preventDefault: vi.fn() }, join(folder, 'late.json'))
+    // A second window is created for the delivery, and the result lands there.
+    await vi.waitFor(() => expect(browserWindowMock.mock.calls).toHaveLength(2))
+    const second = browserWindowMock.mock.results[1]?.value as { webContents: { send: ReturnType<typeof vi.fn> } }
+    await vi.waitFor(() => {
+      const opened = second.webContents.send.mock.calls.find(([channel]) => channel === 'file-opened')
+      expect(opened?.[1]).toMatchObject({ status: 'ok', fileName: 'late.json', root: { type: 'array', count: 1 } })
+    })
   })
 })
 

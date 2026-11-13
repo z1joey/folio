@@ -1,4 +1,4 @@
-import { contextBridge, ipcRenderer } from 'electron'
+import { contextBridge, ipcRenderer, webUtils } from 'electron'
 import type { JsonReaderApi, OpenFileResponse, UpdateState } from '../shared/types'
 
 const api: JsonReaderApi = {
@@ -35,7 +35,9 @@ const api: JsonReaderApi = {
     return () => ipcRenderer.removeListener('update-state-changed', listener)
   },
   getVersion: () => ipcRenderer.invoke('json:get-version'),
-  openExternal: (url: string) => ipcRenderer.invoke('json:open-external', url)
+  openExternal: (url: string) => ipcRenderer.invoke('json:open-external', url),
+  pathForFile: (file: File) => webUtils.getPathForFile(file),
+  openDroppedFiles: (paths: string[]) => ipcRenderer.invoke('json:open-dropped-files', paths)
 }
 
 contextBridge.exposeInMainWorld('jsonReader', api)

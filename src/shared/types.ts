@@ -6,10 +6,14 @@ export type { JsonPath } from './annotationPath'
 
 /**
  * The root shape of an opened file: a JSON array (read item by item), any
- * other JSON value, or a markdown file's full text (rendered, not JSON at
- * all).
+ * other JSON value, a markdown file's full text (rendered, not JSON at
+ * all), or an image file as a data url (rendered, not JSON at all).
  */
-export type RootInfo = { type: 'array'; count: number } | { type: 'value'; value: unknown } | { type: 'markdown'; text: string }
+export type RootInfo =
+  | { type: 'array'; count: number }
+  | { type: 'value'; value: unknown }
+  | { type: 'markdown'; text: string }
+  | { type: 'image'; dataUrl: string }
 
 export type OpenResponse =
   | { status: 'canceled' }
@@ -17,8 +21,14 @@ export type OpenResponse =
   | { status: 'folder'; folderName: string; files: string[] }
   | { status: 'error'; fileName: string; error: string; annotatable?: boolean }
 
+/**
+ * The temporary sidebar context for files handed over by macOS: present
+ * once two or more handoff opens have accumulated in this session.
+ */
+export type OpenedFilesFolder = { name: string; files: string[]; index: number }
+
 export type OpenFileResponse =
-  | { status: 'ok'; fileName: string; root: RootInfo }
+  | { status: 'ok'; fileName: string; root: RootInfo; folder?: OpenedFilesFolder }
   | { status: 'error'; fileName: string; error: string; annotatable?: boolean }
 
 export type ItemResponse = { status: 'ok'; value: unknown } | { status: 'error'; error: string }
@@ -209,6 +219,13 @@ export interface JsonReaderApi {
   consumeFileOpened: () => Promise<OpenFileResponse | null>
   /** Opens an https link in the system browser; refused urls do nothing. */
   openExternal: (url: string) => Promise<void>
+  /** The absolute path of a dropped File object. */
+  pathForFile: (file: File) => string
+  /**
+   * Opens dropped files (json/md) one by one, accumulating them like
+   * macOS handoffs do; resolves with the last file's open result.
+   */
+  openDroppedFiles: (paths: string[]) => Promise<OpenFileResponse>
   /** The background update check's current state. */
   getUpdateState: () => Promise<UpdateState>
   /** Opens the downloaded installer dmg; resolves once handed to the OS. */

@@ -3,8 +3,9 @@ import { createWriteStream } from 'node:fs'
 import { mkdir, readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { lookup } from 'node:dns/promises'
 import type { Readable } from 'node:stream'
-import { basename, join } from 'node:path'
+import { basename, extname, join } from 'node:path'
 import { JsonFile, JsonError, searchText } from './jsonFile'
+import { isOpenableFileName, isImageFile, mimeForExt } from '../shared/fileTypes'
 import { parseRecentFolders, withRecentFolder, type RecentFolder } from './recentFolders'
 import { parseLatestRelease, requestValidated, type ParsedUpdate } from './updater'
 import {
@@ -30,6 +31,7 @@ import type {
   AnnotationsResponse,
   ItemResponse,
   JsonPath,
+  OpenedFilesFolder,
   OpenFileResponse,
   OpenResponse,
   SearchHit,
@@ -52,6 +54,9 @@ const FOLDER_SEARCH_LIMIT = 10
 
 /** Markdown previews read whole files; anything past this is refused. */
 const MAX_MARKDOWN_BYTES = 5 * 1024 * 1024
+
+/** Images preview as data urls; anything past this is refused. */
+const MAX_IMAGE_BYTES = 30 * 1024 * 1024
 
 /**
  * True for loopback, private, link-local and other reserved addresses —
@@ -96,6 +101,10 @@ async function clearFolderSearchCache(): Promise<void> {
 }
 
 function createWindow(): void {
+  if (process.env.JSON_READER_DEBUG) {
+    console.log('[window] createWindow called; isReady =', app.isReady())
+    console.log(new Error('creation site').stack?.split('\n').slice(0, 5).join('\n'))
+  }
   // darwin-only chrome tuning: hiddenInset hides the native bar and the
   // traffic-light position lines them up with the header tools row
   // (52px header, 28px buttons → row center 26px; 12px lights → top 20px).
@@ -191,11 +200,32 @@ async function readMarkdownFile(path: string): Promise<string> {
   return readFile(path, 'utf8')
 }
 
+/**
+ * Reads an image file as a data url — the renderer's CSP blocks
+ * file-scheme sources, but `data:` images are already allowed.
+ */
+async function readImageFile(path: string): Promise<string> {
+  const info = await stat(path)
+  if (info.size > MAX_IMAGE_BYTES) {
+    throw new JsonError('This image is too large to preview.')
+  }
+  const buffer = await readFile(path)
+  const ext = extname(path).slice(1)
+  return `data:image/${mimeForExt(ext)};base64,${buffer.toString('base64')}`
+}
+
 /** Opens `path` as the current file, replacing whatever was open before. */
 async function openJsonFile(path: string): Promise<OpenFileResponse> {
   const fileName = basename(path)
   currentFilePath = path
   try {
+    // Images travel as data urls — no JSON scan, no annotations.
+    if (isImageFile(fileName)) {
+      const dataUrl = await readImageFile(path)
+      currentFile = null
+      currentFileName = fileName
+      return { status: 'ok', fileName, root: { type: 'image', dataUrl } }
+    }
     // Markdown files read as plain text — no JSON scan, no annotations.
     if (/\.md$/i.test(fileName)) {
       const text = await readMarkdownFile(path)
@@ -240,7 +270,7 @@ async function openFolderPath(path: string): Promise<OpenResponse> {
   try {
     const entries = await readdir(path, { withFileTypes: true })
     names = entries
-      .filter((entry) => entry.isFile() && !entry.name.startsWith('.') && /\.(json|md)$/i.test(entry.name))
+      .filter((entry) => entry.isFile() && !entry.name.startsWith('.') && isOpenableFileName(entry.name))
       .map((entry) => entry.name)
       .sort(compareFileWithSidecars)
   } catch {
@@ -262,6 +292,9 @@ async function openFolderPath(path: string): Promise<OpenResponse> {
   }
   // A successful open puts the folder at the front of the recents.
   await recordRecentFolder(path)
+  // A real folder ends the opened-files accumulation: the sidebar now
+  // belongs to this folder's files.
+  handoffFiles.length = 0
   // A single JSON file behaves like a plain file open: no folder panel.
   if (names.length === 1) {
     await clearFolderSearchCache()
@@ -289,11 +322,51 @@ async function showAndOpenFolder(win: BrowserWindow): Promise<OpenResponse> {
    paths arriving before the window exists wait in queue. */
 let lastFileOpened: OpenFileResponse | null = null
 
+/* Files opened through this session's handoffs, in first-open order. From
+   the second one on they form a temporary folder — the sidebar lists them
+   so earlier opens stay reachable. Opening a real folder ends the
+   accumulation: the sidebar belongs to that folder's files. */
+let handoffFiles: string[] = []
+
+const OPENED_FILES_FOLDER_NAME = 'Opened files'
+
+/** The temporary-folder payload for a handoff result, once two or more
+    files have accumulated; single-file mode carries no folder. */
+function openedFilesFolderFor(fileName: string, files: string[]): OpenedFilesFolder | undefined {
+  if (files.length < 2) return undefined
+  return {
+    name: OPENED_FILES_FOLDER_NAME,
+    files: files.map((p) => basename(p)),
+    index: files.findIndex((p) => basename(p) === fileName)
+  }
+}
+
+/** Records a successfully opened handoff/dropped file into the session's
+    accumulation; two or more take over the sidebar until a real folder
+    opens. Returns the response with the temporary folder attached. */
+function noteOpenedFile(path: string, result: OpenFileResponse): OpenFileResponse {
+  if (result.status !== 'ok') return result
+  if (!handoffFiles.includes(path)) handoffFiles.push(path)
+  if (handoffFiles.length >= 2) currentFolderFiles = [...handoffFiles]
+  return { ...result, folder: openedFilesFolderFor(result.fileName, handoffFiles) }
+}
+
 function deliverQueuedOpen(): void {
   const path = queuedOpenPath
-  if (!path || !mainWindow) {
-    if (process.env.JSON_READER_DEBUG) console.log('[open-file] queued but no window yet:', path)
+  if (!path) {
+    if (process.env.JSON_READER_DEBUG) console.log('[open-file] nothing queued')
     return
+  }
+  if (!mainWindow) {
+    // A file can arrive while the app runs but has no window (the window
+    // was closed with ⌘W): macOS sends a bare open-document event and no
+    // reopen, so the activate handler never runs and nothing else would
+    // recreate the window. Create one here and deliver — the freshly
+    // mounted renderer pulls the result through consume-file-opened, so
+    // delivering before its load completes is safe.
+    if (!app.isReady()) return // pre-ready: whenReady delivers after createWindow()
+    if (process.env.JSON_READER_DEBUG) console.log('[open-file] windowless; creating one for:', path)
+    createWindow()
   }
   queuedOpenPath = null
   void openJsonFile(path).then((result) => {
@@ -301,15 +374,21 @@ function deliverQueuedOpen(): void {
     // listener — a file opened at cold launch races that mount, so the
     // result also stays consumable: a freshly mounted renderer pulls it
     // (and clears it) on start.
-    lastFileOpened = result
-    if (process.env.JSON_READER_DEBUG) console.log('[open-file] opened, pushing:', result.fileName, result.status)
-    mainWindow?.webContents.send('file-opened', result)
+    const pushed = noteOpenedFile(path, result)
+    if (process.env.JSON_READER_DEBUG) {
+      const folder = pushed.status === 'ok' ? pushed.folder : undefined
+      console.log('[open-file] opened, pushing:', pushed.fileName, pushed.status, folder ? `(folder of ${folder.files.length})` : '')
+    }
+    lastFileOpened = pushed
+    mainWindow?.webContents.send('file-opened', pushed)
   })
 }
 
 app.on('open-file', (event, filePath) => {
   event.preventDefault()
-  if (process.env.JSON_READER_DEBUG) console.log('[open-file] event received:', filePath)
+  if (process.env.JSON_READER_DEBUG) {
+    console.log('[open-file] event received:', filePath, '; mainWindow =', mainWindow !== null, '; isReady =', app.isReady())
+  }
   queuedOpenPath = filePath
   deliverQueuedOpen()
 })
@@ -815,6 +894,24 @@ async function runUpdateCycle(): Promise<void> {
 }
 
 ipcMain.handle('json:get-update-state', (): UpdateState => updateState)
+
+/**
+ * Opens files dropped onto the window exactly as if they had been handed
+ * over by macOS: each one is opened and accumulated, the sidebar keeps
+ * them reachable, and the last file's result is what the renderer shows.
+ * Paths that are not json/md are skipped.
+ */
+ipcMain.handle('json:open-dropped-files', async (_event, paths: unknown): Promise<OpenFileResponse> => {
+  const list = Array.isArray(paths) ? paths.filter((p): p is string => typeof p === 'string' && isOpenableFileName(basename(p))) : []
+  if (list.length === 0) {
+    return { status: 'error', fileName: '', error: 'Only .json and .md files can be opened.' }
+  }
+  let result: OpenFileResponse = { status: 'error', fileName: '', error: 'No file could be opened.' }
+  for (const path of list) {
+    result = noteOpenedFile(path, await openJsonFile(path))
+  }
+  return result
+})
 
 /**
  * The renderer pulls the latest file-open result on mount — the cold
